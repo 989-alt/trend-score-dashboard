@@ -13,6 +13,13 @@ import type {
   ThemesData,
 } from "./types";
 
+/**
+ * Static-demo build (GitHub Pages): no backend, so fetch bundled sample JSON
+ * under the Vite base path instead of the live `/api/*` endpoints.
+ */
+export const STATIC_DEMO = import.meta.env.VITE_STATIC === "1";
+const BASE = import.meta.env.BASE_URL;
+
 /** Parse a Decimal-as-string|number into a number, or null if absent/invalid. */
 export function toNum(v: unknown): number | null {
   if (v === null || v === undefined || v === "") return null;
@@ -150,14 +157,14 @@ export async function fetchSnapshot(
   market: Market,
   signal?: AbortSignal,
 ): Promise<Snapshot> {
-  const raw = await getJson<RawSnapshot>(
-    `/api/snapshot?market=${market.toLowerCase()}`,
-    signal,
-  );
+  const m = market.toLowerCase();
+  const url = STATIC_DEMO ? `${BASE}data/snapshot-${m}.json` : `/api/snapshot?market=${m}`;
+  const raw = await getJson<RawSnapshot>(url, signal);
   return parseSnapshot(raw);
 }
 
 export async function fetchThemes(signal?: AbortSignal): Promise<ThemesData> {
-  const raw = await getJson<RawThemesResponse>("/api/themes", signal);
+  const url = STATIC_DEMO ? `${BASE}data/themes.json` : "/api/themes";
+  const raw = await getJson<RawThemesResponse>(url, signal);
   return parseThemes(raw);
 }

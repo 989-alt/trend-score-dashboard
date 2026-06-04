@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { fetchSnapshot, fetchThemes } from "./api";
 import type { Market, ScoreEntry } from "./types";
 import { usePolling } from "./hooks/usePolling";
+import { DemoBanner } from "./components/DemoBanner";
 import { Header } from "./components/Header";
 import {
   MarketTabs,
@@ -89,6 +90,7 @@ export function App() {
 
   return (
     <div className={styles.app}>
+      <DemoBanner />
       <div className={styles.container}>
         <Header
           marketOpen={marketOpen}
