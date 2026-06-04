@@ -121,12 +121,12 @@
 .elig {
   color: var(--up);
   background: var(--up-bg);
-  border: 1px solid #bfe6cd;
+  border: 1px solid var(--up-bg);
 }
 
 .inelig {
   color: var(--text-muted);
-  background: #f1f3f6;
+  background: var(--surface-2);
   border: 1px solid var(--border);
 }
 
@@ -218,8 +218,8 @@
   line-height: 1.5;
   color: var(--text-faint);
   padding: 10px 12px;
-  background: #fffaf0;
-  border: 1px solid #f1e3c6;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
 

@@ -23,6 +23,18 @@
   display: flex;
 }
 
+.logoBg {
+  fill: var(--surface-2);
+}
+
+.logoLine {
+  stroke: var(--brand);
+}
+
+.logoDot {
+  fill: var(--brand);
+}
+
 .titles {
   display: flex;
   flex-direction: column;
@@ -33,7 +45,7 @@
   font-size: 19px;
   font-weight: 700;
   letter-spacing: -0.02em;
-  color: var(--text);
+  color: var(--brand);
 }
 
 .subtitle {
@@ -63,12 +75,12 @@
 .open {
   color: var(--up);
   background: var(--up-bg);
-  border-color: #bfe6cd;
+  border-color: var(--up-bg);
 }
 
 .closed {
   color: var(--text-muted);
-  background: #f1f3f6;
+  background: var(--surface-2);
   border-color: var(--border);
 }
 

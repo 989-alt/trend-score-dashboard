@@ -154,7 +154,7 @@
 }
 
 .row:hover {
-  background: #f6f9ff;
+  background: var(--surface-2);
 }
 
 .row:focus-visible {
@@ -163,11 +163,11 @@
 }
 
 .alertRow {
-  background: #fff7f7;
+  background: var(--down-bg);
 }
 
 .alertRow:hover {
-  background: #fdeeee;
+  background: var(--alert-bg);
 }
 
 .table td {

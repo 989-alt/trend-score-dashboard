@@ -13,7 +13,7 @@
 .track {
   flex: 1;
   height: 8px;
-  background: #eef0f3;
+  background: var(--surface-2);
   border-radius: 999px;
   overflow: hidden;
 }
@@ -29,23 +29,23 @@
 }
 
 .high {
-  background: linear-gradient(90deg, #16a34a, #22c55e);
+  background: var(--grade-strong);
 }
 
 .mid {
-  background: linear-gradient(90deg, #2563eb, #3b82f6);
+  background: var(--grade-buy);
 }
 
 .low {
-  background: linear-gradient(90deg, #d97706, #f59e0b);
+  background: var(--grade-hold);
 }
 
 .weak {
-  background: #c4c9d2;
+  background: var(--grade-avoid);
 }
 
 .alert {
-  background: linear-gradient(90deg, #b91c1c, #ef4444);
+  background: var(--grade-sell);
 }
 
 .value {

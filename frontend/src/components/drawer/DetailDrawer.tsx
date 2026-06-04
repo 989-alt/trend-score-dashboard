@@ -17,6 +17,7 @@ import { SellBadge } from "../badges/SellBadge";
 import { ScoreGauge } from "../ScoreGauge";
 import { FactorBars } from "./FactorBars";
 import { InvestorFlowBars } from "./InvestorFlowBars";
+import { RationaleSection } from "./RationaleSection";
 import styles from "./DetailDrawer.module.css";
 
 interface Props {
@@ -127,6 +128,8 @@ export function DetailDrawer({ entry, onClose }: Props) {
         </div>
 
         <div className={styles.body}>
+          <RationaleSection entry={entry} />
+
           <Section title={t("drawer.section.quote")}>
             <dl className={styles.grid}>
               <Field
@@ -266,12 +269,6 @@ export function DetailDrawer({ entry, onClose }: Props) {
               />
             </dl>
           </Section>
-
-          {entry.rationale && (
-            <Section title={t("drawer.section.rationale")}>
-              <p className={styles.rationale}>{entry.rationale}</p>
-            </Section>
-          )}
 
           <p className={styles.disclaimer}>{t("disclaimer.text")}</p>
         </div>

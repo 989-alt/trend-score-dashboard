@@ -1,49 +1,75 @@
 :root {
-  /* Light minimal white palette */
-  --bg: #f7f8fa;
-  --surface: #ffffff;
-  --surface-2: #fbfcfd;
-  --border: #e6e8ec;
-  --border-strong: #d4d7dd;
-  --text: #1a1d23;
-  --text-muted: #5b6373;
-  --text-faint: #8a92a3;
+  /* ─────────────────────────────────────────────────────────────
+   * Binance-style dark trading design system (see design.md).
+   * Token NAMES are unchanged (components consume them) — only the
+   * VALUES flip to the dark canvas + single-yellow-accent palette.
+   * ───────────────────────────────────────────────────────────── */
 
-  --brand: #2563eb;
-  --brand-weak: #eff4ff;
+  /* Canvas / surfaces — flat color-block elevation, no atmospherics */
+  --bg: #0b0e11; /* canvas-dark — near-black, slight warm tint */
+  --surface: #1e2329; /* surface-card-dark — elevated cards, tables */
+  --surface-2: #2b3139; /* surface-elevated-dark — nested / hovered */
+  --border: #2b3139; /* hairline-on-dark — borders feel like surface steps */
+  --border-strong: #474d57;
+  --text: #eaecef; /* body on dark — not pure white */
+  --text-muted: #929aa5; /* muted-strong — emphasized labels */
+  --text-faint: #707a8a; /* muted — captions, column headers */
 
-  --up: #15803d;
-  --up-bg: #e9f7ef;
-  --down: #b91c1c;
-  --down-bg: #fdecec;
-  --flat: #6b7280;
+  /* Brand = Binance Yellow — the single accent. Used scarcely:
+   * brand mark, primary CTA, active tab. Never decorative/body. */
+  --brand: #fcd535;
+  --brand-active: #f0b90b;
+  --brand-weak: rgba(252, 213, 53, 0.12);
+  --on-brand: #181a20; /* black text on yellow — signature combo */
 
-  /* Grade colors (always paired with a text label + icon, never color-only) */
-  --grade-strong: #15803d;
-  --grade-strong-bg: #e6f6ec;
-  --grade-buy: #2563eb;
-  --grade-buy-bg: #eaf1ff;
-  --grade-hold: #b45309;
-  --grade-hold-bg: #fdf3e7;
-  --grade-avoid: #6b7280;
-  --grade-avoid-bg: #f1f3f6;
-  --grade-sell: #b91c1c;
-  --grade-sell-bg: #fdecec;
+  /* Trading semantics — green up / red down, as TEXT color (not card fills) */
+  --up: #0ecb81;
+  --up-bg: rgba(14, 203, 129, 0.12);
+  --down: #f6465d;
+  --down-bg: rgba(246, 70, 93, 0.12);
+  --flat: #707a8a;
 
-  --alert: #b91c1c;
-  --alert-bg: #fff1f1;
-  --alert-border: #f6c5c5;
+  /* Grade colors — mapped to trading semantics:
+   * buy = green, sell = red, hold/avoid = neutral muted.
+   * (Yellow stays reserved for brand/CTA, never grades.) */
+  --grade-strong: #0ecb81;
+  --grade-strong-bg: rgba(14, 203, 129, 0.16);
+  --grade-buy: #0ecb81;
+  --grade-buy-bg: rgba(14, 203, 129, 0.1);
+  --grade-hold: #b7bdc6;
+  --grade-hold-bg: rgba(146, 154, 165, 0.12);
+  --grade-avoid: #707a8a;
+  --grade-avoid-bg: rgba(112, 122, 138, 0.1);
+  --grade-sell: #f6465d;
+  --grade-sell-bg: rgba(246, 70, 93, 0.16);
 
-  --radius: 10px;
-  --radius-sm: 6px;
-  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
-  --shadow-md: 0 4px 16px rgba(16, 24, 40, 0.08);
-  --shadow-lg: 0 12px 40px rgba(16, 24, 40, 0.16);
+  --alert: #f6465d;
+  --alert-bg: rgba(246, 70, 93, 0.1);
+  --alert-border: rgba(246, 70, 93, 0.38);
 
+  /* Info / focus — design's --tw-ring base */
+  --info: #3b82f6;
+  --ring: rgba(59, 130, 246, 0.5);
+
+  /* Radius — tight 6/8/12 scale + pill for top-of-page actions */
+  --radius: 12px; /* rounded.xl — elevated card containers */
+  --radius-sm: 8px; /* rounded.lg — content cards, inputs */
+  --radius-xs: 6px; /* rounded.md — buttons */
+  --radius-pill: 9999px;
+
+  /* Elevation — flat. Shadows only on the modal drawer/overlay. */
+  --shadow-sm: none;
+  --shadow-md: 0 12px 40px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.6);
+
+  /* Type — Inter (BinanceNova sub) for copy, JetBrains Mono (BinancePlex sub)
+   * for every number: prices, %, volumes, scores, stat counters. */
   --font:
-    "Inter", "Pretendard", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    "Helvetica Neue", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
-  --mono: "SF Mono", "JetBrains Mono", "Roboto Mono", ui-monospace, monospace;
+    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --mono:
+    "JetBrains Mono", "IBM Plex Mono", "SF Mono", ui-monospace, "Roboto Mono",
+    monospace;
 }
 
 * {
@@ -60,10 +86,12 @@ body {
   font-family: var(--font);
   background: var(--bg);
   color: var(--text);
+  color-scheme: dark; /* native controls (select, scrollbar) render dark */
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   font-size: 14px;
   line-height: 1.5;
+  font-feature-settings: "tnum" 1; /* tabular numerals everywhere */
 }
 
 #root {
@@ -79,8 +107,16 @@ button {
   cursor: pointer;
 }
 
+/* Every number reads in the tabular mono "trustworthy number" voice. */
+.num,
+[data-num] {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
 :focus-visible {
-  outline: 2px solid var(--brand);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
   border-radius: 4px;
 }

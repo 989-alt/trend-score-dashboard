@@ -35,8 +35,8 @@ _SELL_TICKER_KR = "000660"
 
 @pytest.fixture
 def settings() -> Settings:
-    """기본 설정(sample 모드)."""
-    return Settings()
+    """sample 모드 설정. ``.env`` 의 live 모드가 새지 않도록 명시 고정."""
+    return Settings(data_mode="sample")
 
 
 @pytest.fixture

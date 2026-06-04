@@ -235,7 +235,7 @@ def test_live_kis_quote_glitch_guard_refetch(monkeypatch: pytest.MonkeyPatch) ->
     lp = _live()
     calls = {"n": 0}
 
-    def fake_once(ticker: str) -> Quote:
+    def fake_once(ticker: str, *, force: bool = False) -> Quote:
         calls["n"] += 1
         if calls["n"] == 1:
             # 전일 종가 100 대비 10배 = 글리치.
@@ -269,10 +269,11 @@ def test_live_kis_ohlcv_parsing_sorted(monkeypatch: pytest.MonkeyPatch) -> None:
     assert all(rows[i].date < rows[i + 1].date for i in range(len(rows) - 1))
 
 
-def test_live_kis_investor_flow_amounts(monkeypatch: pytest.MonkeyPatch) -> None:
-    """FIX-A: KIS 투자자별 매수/매도 거래대금 → InvestorFlow(net=매수−매도).
+def test_live_kis_investor_flow_net_amounts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FIX: inquire-investor 는 **순매수 거래대금**만 준다 → ``*_net`` 만 채우고 buy/sell=None.
 
-    수량(``*_ntby_qty``)이 아니라 거래대금(``*_tr_pbmn``)을 읽고, net 은 매수금−매도금.
+    매수/매도 분리 거래대금 필드(``*_shnu_tr_pbmn``)는 응답에 없으므로, 순매수 필드
+    ``frgn_ntby_tr_pbmn``/``orgn_ntby_tr_pbmn``/``prsn_ntby_tr_pbmn``(KRW)로 net 을 채운다.
     """
     lp = _live()
 
@@ -282,12 +283,9 @@ def test_live_kis_investor_flow_amounts(monkeypatch: pytest.MonkeyPatch) -> None
             "output": [
                 {
                     "stck_bsop_date": "20250103",
-                    "frgn_shnu_tr_pbmn": "300000000000",  # 외국인 매수 3,000억
-                    "frgn_seln_tr_pbmn": "200000000000",  # 외국인 매도 2,000억
-                    "orgn_shnu_tr_pbmn": "150000000000",
-                    "orgn_seln_tr_pbmn": "180000000000",
-                    "prsn_shnu_tr_pbmn": "100000000000",
-                    "prsn_seln_tr_pbmn": "170000000000",
+                    "frgn_ntby_tr_pbmn": "100000000000",  # 외국인 순매수 +1,000억
+                    "orgn_ntby_tr_pbmn": "-30000000000",  # 기관 순매수 -300억
+                    "prsn_ntby_tr_pbmn": "-70000000000",  # 개인 순매수 -700억
                 }
             ],
         }
@@ -295,26 +293,28 @@ def test_live_kis_investor_flow_amounts(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(lp, "_kis_get", fake_get)
     flow = lp.get_investor_flow("005930")
     assert isinstance(flow, InvestorFlow)
-    assert flow.foreign_buy == Decimal("300000000000")
-    assert flow.foreign_sell == Decimal("200000000000")
-    assert flow.foreign_net == Decimal("100000000000")  # 매수 − 매도
+    assert flow.foreign_net == Decimal("100000000000")
     assert flow.institution_net == Decimal("-30000000000")
     assert flow.individual_net == Decimal("-70000000000")
+    # 매수/매도 분리 금액은 이 API 가 주지 않음 → None(프론트는 net 만 표시로 폴백).
+    assert flow.foreign_buy is None
+    assert flow.foreign_sell is None
+    assert flow.institution_buy is None
+    assert flow.individual_sell is None
     # US 형태 심볼은 KIS 호출 전에 None.
     assert lp.get_investor_flow("NVDA") is None
 
 
-def test_live_kis_investor_flow_missing_amount_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    """FIX-A: 거래대금 필드 부재 시 LiveProviderError(무음 0 금지)."""
+def test_live_kis_investor_flow_all_missing_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FIX: 순매수 거래대금 세 필드가 모두 결측이면 None 반환(raise 금지)."""
     lp = _live()
 
     def fake_get(path: str, *, tr_id: str, params: dict[str, str]) -> dict[str, Any]:
-        # 수량 필드만 있고 거래대금 필드는 부재.
+        # 순매수 거래대금 필드가 전부 부재.
         return {"rt_cd": "0", "output": [{"stck_bsop_date": "20250103", "frgn_ntby_qty": "5000"}]}
 
     monkeypatch.setattr(lp, "_kis_get", fake_get)
-    with pytest.raises(LiveProviderError):
-        lp.get_investor_flow("005930")
+    assert lp.get_investor_flow("005930") is None
 
 
 def test_live_us_quote_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -384,7 +384,7 @@ def test_live_kis_quote_glitch_persists_raises(monkeypatch: pytest.MonkeyPatch) 
     """FIX-D: 재조회 후에도 ±50% 밖이면 LiveProviderError(무조건 채택 금지)."""
     lp = _live()
 
-    def always_glitch(ticker: str) -> Quote:
+    def always_glitch(ticker: str, *, force: bool = False) -> Quote:
         # 전일 100 대비 10배 = 지속 글리치.
         return Quote(price=Decimal("1000"), prev_close=Decimal("100"), asof=_now())
 
@@ -393,8 +393,8 @@ def test_live_kis_quote_glitch_persists_raises(monkeypatch: pytest.MonkeyPatch) 
         lp.get_quote("005930", "KR")
 
 
-def test_live_universe_kr_pykrx(monkeypatch: pytest.MonkeyPatch) -> None:
-    """FIX-B: KR 유니버스는 pykrx KOSPI∪KOSDAQ 전 종목 + 1회 캐시."""
+def test_live_universe_kr_pykrx_caches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """KR 유니버스 = 거래대금 상위 N + 인스턴스 1회 캐시."""
     lp = _live()
     calls = {"n": 0}
 
@@ -410,8 +410,47 @@ def test_live_universe_kr_pykrx(monkeypatch: pytest.MonkeyPatch) -> None:
     assert calls["n"] == 1  # 인스턴스 1회 캐시 → 2번째는 fetch 안 함
 
 
+def test_live_fetch_universe_kr_top_n_by_turnover(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``_fetch_universe_kr``: 벌크 거래대금 DataFrame → 내림차순 상위 N(6자리 zero-pad).
+
+    pykrx/pandas 를 mock — 개별 종목 루프 없이 시장당 1콜(벌크)만 호출하는지 함께 검증.
+    """
+    pd = pytest.importorskip("pandas")
+    lp = _live()
+    settings = lp._settings.model_copy(update={"live_universe_top_n": 3})
+    monkeypatch.setattr(lp, "_settings", settings)
+
+    bulk_calls = {"n": 0}
+
+    class FakeStock:
+        @staticmethod
+        def get_nearest_business_day_in_a_week(*_a: object, **_k: object) -> str:
+            return "20250103"
+
+        @staticmethod
+        def get_market_ohlcv_by_ticker(_bday: str, market: str = "") -> object:
+            bulk_calls["n"] += 1
+            if market == "KOSPI":
+                return pd.DataFrame(
+                    {"거래대금": [900, 300]}, index=["5930", "5490"]
+                )  # zero-pad 검증용 5자리 인덱스
+            return pd.DataFrame({"거래대금": [800, 100]}, index=["247540", "035720"])
+
+    # pykrx.stock 과 pandas import 를 가짜로 주입.
+    import sys
+
+    fake_pykrx = type(sys)("pykrx")
+    fake_pykrx.stock = FakeStock  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "pykrx", fake_pykrx)
+
+    tickers = lp._fetch_universe_kr()
+    # 거래대금 내림차순 상위 3: 5930(900)>247540(800)>5490(300). zero-pad 적용.
+    assert tickers == ["005930", "247540", "005490"]
+    assert bulk_calls["n"] == 2  # KOSPI·KOSDAQ 각 1콜(벌크) — 개별 루프 금지
+
+
 def test_live_universe_kr_fallback_to_themes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """FIX-B: pykrx 실패 시 themes.yml 로 graceful fallback."""
+    """pykrx 실패(빈 결과) 시 themes.yml 로 graceful fallback."""
     lp = _live()
     monkeypatch.setattr(lp, "_fetch_universe_kr", lambda: [])  # 실패 모사(빈 결과)
     kr = lp.list_universe("KR")
@@ -419,59 +458,24 @@ def test_live_universe_kr_fallback_to_themes(monkeypatch: pytest.MonkeyPatch) ->
     assert len(kr) == len(set(kr))
 
 
-def test_live_universe_us_nasdaq_dump(monkeypatch: pytest.MonkeyPatch) -> None:
-    """FIX-B: US 유니버스는 NASDAQ Trader 심볼덤프(보통주만, 테스트이슈·ETF 제외)."""
+def test_live_universe_us_static_top_n() -> None:
+    """US 유니버스 = 유동성 정적 화이트리스트 상위 N(거래대금 상위 근사)."""
     lp = _live()
-    nasdaqlisted = (
-        "Symbol|Security Name|Market Category|Test Issue"
-        "|Financial Status|Round Lot Size|ETF|NextShares\n"
-        "AAPL|Apple Inc. - Common Stock|Q|N|N|100|N|N\n"
-        "ZTEST|Test Issue|Q|Y|N|100|N|N\n"  # 테스트이슈 → 제외
-        "QQQ|Invesco QQQ Trust|Q|N|N|100|Y|N\n"  # ETF → 제외
-        "File Creation Time: 0601202512:00\n"
-    )
-    otherlisted = (
-        "ACT Symbol|Security Name|Exchange|CQS Symbol"
-        "|ETF|Round Lot Size|Test Issue|NASDAQ Symbol\n"
-        "BRK.B|Berkshire Hathaway|N|BRK.B|N|100|N|BRK.B\n"  # '.' 포함 → 제외
-        "JPM|JPMorgan|N|JPM|N|100|N|JPM\n"
-        "SPY|SPDR S&P 500|P|SPY|Y|100|N|SPY\n"  # ETF → 제외
-        "File Creation Time: 0601202512:00\n"
-    )
-
-    class FakeResp:
-        def __init__(self, text: str) -> None:
-            self.text = text
-
-        def raise_for_status(self) -> None:
-            return None
-
-    def fake_client_get(url: str, timeout: float = 20.0) -> FakeResp:
-        return FakeResp(nasdaqlisted if "nasdaqlisted" in url else otherlisted)
-
-    monkeypatch.setattr(lp._client, "get", fake_client_get)
+    settings = lp._settings.model_copy(update={"live_universe_top_n": 5})
+    lp._settings = settings
     us = lp.list_universe("US")
-    assert "AAPL" in us
-    assert "JPM" in us
-    assert "ZTEST" not in us  # 테스트이슈 제외
-    assert "QQQ" not in us  # ETF 제외
-    assert "SPY" not in us
-    assert "BRK.B" not in us  # 비보통주 표기('.') 제외
+    assert len(us) == 5
+    assert "AAPL" in us  # 최상위 유동성
+    assert "NVDA" in us
     assert len(us) == len(set(us))
 
 
-def test_live_universe_us_fallback_to_themes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """FIX-B: NASDAQ 덤프 실패(HTTP 오류) 시 themes.yml fallback."""
-    import httpx as _httpx
-
-    lp = _live()
-
-    def boom(url: str, timeout: float = 20.0) -> None:
-        raise _httpx.ConnectError("network down")
-
-    monkeypatch.setattr(lp._client, "get", boom)
+def test_live_universe_us_top_n_caps_default() -> None:
+    """기본 top_n(300)으로도 정적 리스트 길이 이내에서 안전하게 동작."""
+    lp = _live()  # 기본 live_universe_top_n=300
     us = lp.list_universe("US")
-    assert "NVDA" in us  # themes.yml 큐레이션
+    assert 0 < len(us) <= 300
+    assert "MSFT" in us
 
 
 # ---------------------------------------------------------------------------

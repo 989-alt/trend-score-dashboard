@@ -28,29 +28,29 @@
 .strong_buy {
   color: var(--grade-strong);
   background: var(--grade-strong-bg);
-  border-color: #bfe6cd;
+  border-color: var(--grade-strong-bg);
 }
 
 .buy {
   color: var(--grade-buy);
   background: var(--grade-buy-bg);
-  border-color: #c8dbff;
+  border-color: var(--grade-buy-bg);
 }
 
 .hold {
   color: var(--grade-hold);
   background: var(--grade-hold-bg);
-  border-color: #f1ddc0;
+  border-color: var(--grade-hold-bg);
 }
 
 .avoid {
   color: var(--grade-avoid);
   background: var(--grade-avoid-bg);
-  border-color: #dfe3e9;
+  border-color: var(--grade-avoid-bg);
 }
 
 .sell {
   color: var(--grade-sell);
   background: var(--grade-sell-bg);
-  border-color: #f3c9c9;
+  border-color: var(--grade-sell-bg);
 }

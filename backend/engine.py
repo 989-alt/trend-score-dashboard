@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -137,9 +138,12 @@ def _collect_raw(
         above_ma200=above,
         eligible=eligible,
     )
+    # 이미 받은 fundamentals.name(KR=hts_kor_isnm, US=shortName)을 우선 사용해
+    # get_name 의 중복 inquire-price 호출을 제거한다(없을 때만 폴백).
+    name = fundamentals.name or provider.get_name(ticker, market)
     return _Raw(
         ticker=ticker,
-        name=provider.get_name(ticker, market),
+        name=name,
         rows=rows,
         quote=quote,
         fundamentals=fundamentals,
@@ -294,13 +298,18 @@ def score_market(
     theme_defs = themes if themes is not None else []
     universe = provider.list_universe(market)
 
+    # I/O 병렬 — provider 호출(_collect_raw)만 ThreadPoolExecutor 로 동시 수집한다.
+    # httpx.Client·yfinance 는 스레드세이프(토큰 발급만 Lock). 이후 점수화·손절·저장은
+    # 순차(스레드 안전). per-ticker 예외는 _TICKER_ERRORS 로 흡수해 failed 카운트.
     raws: list[_Raw] = []
     failed = 0
-    for ticker in universe:
-        try:
-            raws.append(_collect_raw(ticker, market, provider, settings))
-        except _TICKER_ERRORS:
-            failed += 1
+    with ThreadPoolExecutor(max_workers=settings.max_workers) as pool:
+        futures = [pool.submit(_collect_raw, t, market, provider, settings) for t in universe]
+        for future in futures:
+            try:
+                raws.append(future.result())
+            except _TICKER_ERRORS:
+                failed += 1
 
     # 정규화 모집단은 적격 종목만 — 부적격이 cross-sectional min/max 를 오염시키지 않게
     # (원본 screener.py:805-850 과 동치: 하드필터 통과분만 _score_trend_candidates 로).

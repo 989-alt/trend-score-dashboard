@@ -49,14 +49,15 @@
   padding: 7px 16px;
   border: 1px solid var(--brand);
   background: var(--brand);
-  color: #fff;
-  border-radius: var(--radius-sm);
+  color: var(--on-brand);
+  border-radius: var(--radius-xs);
   font-size: 13px;
   font-weight: 600;
 }
 
 .retry:hover {
-  background: #1d4ed8;
+  background: var(--brand-active);
+  border-color: var(--brand-active);
 }
 
 @keyframes spin {

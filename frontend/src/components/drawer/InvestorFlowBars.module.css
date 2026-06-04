@@ -64,12 +64,12 @@
 }
 
 .pos {
-  background: linear-gradient(90deg, #34d399, #16a34a);
+  background: var(--up);
   border-radius: 0 3px 3px 0;
 }
 
 .neg {
-  background: linear-gradient(90deg, #b91c1c, #f87171);
+  background: var(--down);
   border-radius: 3px 0 0 3px;
 }
 

@@ -3,10 +3,10 @@
   align-items: center;
   gap: 8px;
   padding: 8px 14px;
-  background: #fffaf0;
-  border: 1px solid #f1e3c6;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  color: #7a5c14;
+  color: var(--text-muted);
   font-size: 12.5px;
   line-height: 1.4;
 }
@@ -14,7 +14,7 @@
 .icon {
   flex: none;
   font-size: 14px;
-  color: #b07d10;
+  color: var(--info);
 }
 
 .text {

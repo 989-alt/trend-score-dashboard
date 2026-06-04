@@ -10,8 +10,6 @@ interface Props {
 export function MarketBadge({ market }: Props) {
   const t = useT();
   return (
-    <span className={`${styles.badge} ${styles[market]}`}>
-      {t(`market.badge.${market}`)}
-    </span>
+    <span className={styles.badge}>{t(`market.badge.${market}`)}</span>
   );
 }

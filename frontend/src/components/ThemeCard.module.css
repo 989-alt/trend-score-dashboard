@@ -74,15 +74,15 @@
 }
 
 .leader:hover {
-  background: #f6f9ff;
+  background: var(--surface-2);
 }
 
 .alert {
-  background: #fff7f7;
+  background: var(--down-bg);
 }
 
 .alert:hover {
-  background: #fdeeee;
+  background: var(--alert-bg);
 }
 
 .name {

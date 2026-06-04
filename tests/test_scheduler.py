@@ -30,8 +30,8 @@ _SEOUL = ZoneInfo("Asia/Seoul")
 
 @pytest.fixture
 def settings() -> Settings:
-    """기본 설정(sample 모드 — 키 불필요, 결정론)."""
-    return Settings()
+    """sample 모드 설정(키 불필요·결정론). ``.env`` 의 live 모드가 새지 않도록 명시 고정."""
+    return Settings(data_mode="sample")
 
 
 @pytest.fixture

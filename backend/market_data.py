@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import threading
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
@@ -515,48 +516,415 @@ _KIS_DOMAINS = {
 #: 시세 글리치 가드 — 직전 기준가 대비 이 배수 밖이면 재조회.
 _GLITCH_LOW = Decimal("0.5")
 _GLITCH_HIGH = Decimal("1.5")
+#: KIS inquire-price 단기 TTL(초) — quote·fundamentals 가 같은 호출을 공유해 중복 제거.
+_PRICE_TTL = timedelta(seconds=30)
 
-#: NASDAQ Trader 심볼덤프 — (URL, 심볼 컬럼명). 보통주 필터는 ``_parse_nasdaq_dump`` 가 수행.
-#: nasdaqlisted=NASDAQ 상장, otherlisted=NYSE/AMEX 등(NASDAQ 외).
-_NASDAQ_DUMPS: tuple[tuple[str, str], ...] = (
-    ("https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt", "Symbol"),
-    ("https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt", "ACT Symbol"),
+#: US '거래대금 상위' 근사 — 유동성 큰 정적 화이트리스트(S&P 500 + 주요 대형주).
+#: 대략 대형주·고유동성 순으로 정렬해 ``head(N)`` 이 가장 유동성 높은 N 을 주도록 한다.
+#: (US 거래대금 순위 무료 단일소스 부재 → 대형주 화이트리스트가 안전한 근사.)
+_US_LIQUID: tuple[str, ...] = (
+    # 메가캡·초고유동성
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "AMZN",
+    "GOOGL",
+    "GOOG",
+    "META",
+    "TSLA",
+    "AVGO",
+    "BRK-B",
+    "LLY",
+    "JPM",
+    "V",
+    "XOM",
+    "UNH",
+    "MA",
+    "JNJ",
+    "PG",
+    "HD",
+    "COST",
+    "ORCL",
+    "MRK",
+    "ABBV",
+    "CVX",
+    "AMD",
+    "NFLX",
+    "KO",
+    "ADBE",
+    "PEP",
+    "BAC",
+    "CRM",
+    "TMO",
+    "WMT",
+    "ACN",
+    "MCD",
+    "LIN",
+    "ABT",
+    "CSCO",
+    "DHR",
+    "WFC",
+    "INTC",
+    "DIS",
+    "QCOM",
+    "TXN",
+    "VZ",
+    "INTU",
+    "AMGN",
+    "CAT",
+    "IBM",
+    "NOW",
+    "PM",
+    "GE",
+    "SPGI",
+    "UNP",
+    "AMAT",
+    "ISRG",
+    "HON",
+    "RTX",
+    "NEE",
+    "PFE",
+    "GS",
+    "LOW",
+    "BKNG",
+    "UBER",
+    "T",
+    "ELV",
+    "PLD",
+    "SYK",
+    "BLK",
+    "AXP",
+    "TJX",
+    "MDT",
+    "C",
+    "VRTX",
+    "PGR",
+    "LRCX",
+    "SCHW",
+    "BSX",
+    "MS",
+    "REGN",
+    "CB",
+    "ADP",
+    "MU",
+    "ETN",
+    "CI",
+    "MMC",
+    "ZTS",
+    "DE",
+    "BMY",
+    "FI",
+    "SO",
+    "BX",
+    "MO",
+    "CMG",
+    "ADI",
+    "KLAC",
+    "DUK",
+    "ANET",
+    "SHW",
+    "ICE",
+    "WM",
+    "SNPS",
+    "GD",
+    "CDNS",
+    "TT",
+    "CL",
+    "PYPL",
+    "EQIX",
+    "APH",
+    "PH",
+    "AON",
+    "MCK",
+    "ITW",
+    "CME",
+    "MSI",
+    "PNC",
+    "USB",
+    "NOC",
+    "FDX",
+    "CSX",
+    "EOG",
+    "MPC",
+    "ORLY",
+    "MAR",
+    "CARR",
+    "ECL",
+    "EMR",
+    "ROP",
+    "AJG",
+    "PSX",
+    "WELL",
+    "NXPI",
+    "SLB",
+    "HCA",
+    "TGT",
+    "MMM",
+    "AFL",
+    "TFC",
+    "FCX",
+    "TDG",
+    "DXCM",
+    "CPRT",
+    "AIG",
+    "GM",
+    "MET",
+    "PCAR",
+    "OKE",
+    "SPG",
+    "NSC",
+    "ABNB",
+    "AZO",
+    "GEV",
+    "AMP",
+    "TRV",
+    "DHI",
+    "KMB",
+    "URI",
+    "O",
+    "BK",
+    "VLO",
+    "PSA",
+    "F",
+    "PWR",
+    "D",
+    "GWW",
+    "CMI",
+    "COF",
+    "HLT",
+    "AEP",
+    "JCI",
+    "ROST",
+    "FIS",
+    "MSCI",
+    "SRE",
+    "ALL",
+    "FTNT",
+    "LHX",
+    "OXY",
+    "FAST",
+    "PRU",
+    "PAYX",
+    "KMI",
+    "IDXX",
+    "CTAS",
+    "DOW",
+    "KVUE",
+    "VRSK",
+    "A",
+    "EW",
+    "CCI",
+    "GIS",
+    "ODFL",
+    "KR",
+    "EXC",
+    "HUM",
+    "KHC",
+    "DD",
+    "YUM",
+    "GEHC",
+    "BKR",
+    "ACGL",
+    "MCHP",
+    "NUE",
+    "MNST",
+    "EA",
+    "CTSH",
+    "HES",
+    "IR",
+    "LEN",
+    "PEG",
+    "OTIS",
+    "RCL",
+    "XEL",
+    "CSGP",
+    "STZ",
+    "DAL",
+    "FANG",
+    "VICI",
+    "MLM",
+    "WAB",
+    "CNC",
+    "ON",
+    "VMC",
+    "DG",
+    "EFX",
+    "ROK",
+    "TSCO",
+    "WEC",
+    "HPQ",
+    "GLW",
+    "AVB",
+    "AME",
+    "WTW",
+    "KDP",
+    "ED",
+    "MPWR",
+    "TTWO",
+    "CAH",
+    "DLR",
+    "FICO",
+    "CBRE",
+    "DFS",
+    "HSY",
+    "EL",
+    "BRO",
+    "MTD",
+    "ANSS",
+    "WMB",
+    "EBAY",
+    "RMD",
+    "ZBH",
+    "CHTR",
+    "PPG",
+    "TROW",
+    "DELL",
+    "EXR",
+    "AWK",
+    "STT",
+    "GPN",
+    "NVR",
+    "VLTO",
+    "IQV",
+    "K",
+    "WST",
+    "HIG",
+    "FITB",
+    "ULTA",
+    "KEYS",
+    "TDY",
+    "GRMN",
+    "DOV",
+    "MOH",
+    "BR",
+    "STE",
+    "PHM",
+    "VTR",
+    "WDC",
+    "RJF",
+    "CDW",
+    "HWM",
+    "EQR",
+    "ADM",
+    "WRB",
+    "DTE",
+    "TYL",
+    "HPE",
+    "NTAP",
+    "PPL",
+    "SBAC",
+    "CTRA",
+    "TER",
+    "FE",
+    "ES",
+    "BIIB",
+    "GPC",
+    "HBAN",
+    "WAT",
+    "INVH",
+    "LYB",
+    "MKC",
+    "STLD",
+    "BLDR",
+    "VRSN",
+    "ETR",
+    "IFF",
+    "RF",
+    "CMS",
+    "DRI",
+    "WBD",
+    "STX",
+    "PFG",
+    "MTB",
+    "BAX",
+    "LDOS",
+    "DGX",
+    "FSLR",
+    "EXPE",
+    "NDAQ",
+    "COO",
+    "CFG",
+    "AEE",
+    "TSN",
+    "LH",
+    "ZBRA",
+    "PKG",
+    "ATO",
+    "JBHT",
+    "CINF",
+    "WY",
+    "MAA",
+    "ON",
+    "TXT",
+    "CNP",
+    "FDS",
+    "VTRS",
+    "SWKS",
+    "EXPD",
+    "MAS",
+    "CLX",
+    "L",
+    "BBY",
+    "CE",
+    "DPZ",
+    "OMC",
+    "AVY",
+    "AKAM",
+    "NTRS",
+    "ALGN",
+    "POOL",
+    "ESS",
+    "EG",
+    "WBA",
+    "ROL",
+    "SNA",
+    "JBL",
+    "HOLX",
+    "BG",
+    "SWK",
+    "IP",
+    "UAL",
+    "DVN",
+    "TRGP",
+    "GEN",
+    "MRNA",
+    "LNT",
+    "KEY",
+    "RVTY",
+    "EVRG",
+    "NRG",
+    "AMCR",
+    "TPR",
+    "PNR",
+    "JKHY",
+    "INCY",
+    "KIM",
+    "CAG",
+    "UDR",
+    "BALL",
+    "DOC",
+    "APTV",
+    "REG",
+    "CPT",
+    "NI",
+    "MGM",
+    "EMN",
+    "JNPR",
+    "TFX",
+    "CHRW",
+    "ARE",
+    "FFIV",
+    "ALLE",
+    "HST",
+    "PODD",
+    "SOLV",
+    "AES",
+    "BXP",
+    "HRL",
+    "WRK",
+    "LKQ",
+    "DAY",
 )
-
-
-def _parse_nasdaq_dump(text: str, symbol_col: str) -> list[str]:
-    """NASDAQ Trader 심볼덤프(파이프 구분) → 보통주 심볼 리스트.
-
-    - 헤더 1행으로 컬럼 인덱스를 잡고, 마지막 ``File Creation Time`` 푸터는 건너뛴다.
-    - ``Test Issue == 'Y'``(테스트이슈) 제외, ``ETF == 'Y'``(ETF) 제외 → 보통주만.
-    - 심볼이 비었거나 ``$``/``.`` 등 비보통주 표기를 포함하면 제외.
-    """
-    lines = [ln for ln in text.splitlines() if ln.strip()]
-    if not lines:
-        return []
-    header = lines[0].split("|")
-    try:
-        sym_idx = header.index(symbol_col)
-    except ValueError:
-        return []
-    test_idx = header.index("Test Issue") if "Test Issue" in header else None
-    etf_idx = header.index("ETF") if "ETF" in header else None
-    out: list[str] = []
-    for line in lines[1:]:
-        if line.startswith("File Creation Time"):
-            continue
-        cols = line.split("|")
-        if len(cols) <= sym_idx:
-            continue
-        symbol = cols[sym_idx].strip()
-        if not symbol or "$" in symbol or "." in symbol:
-            continue
-        if test_idx is not None and len(cols) > test_idx and cols[test_idx].strip() == "Y":
-            continue
-        if etf_idx is not None and len(cols) > etf_idx and cols[etf_idx].strip() == "Y":
-            continue
-        out.append(symbol)
-    return out
 
 
 class LiveProviderError(RuntimeError):
@@ -576,22 +944,24 @@ class LiveProvider:
         self._client = httpx.Client(base_url=self._base, timeout=10.0)
         self._token: str | None = None
         self._token_exp: datetime | None = None
+        #: 토큰 발급 경쟁 차단(동시성에서 중복 발급 방지). httpx.Client 자체는 스레드세이프.
+        self._token_lock = threading.Lock()
         #: 유니버스 인스턴스 1회 캐시(전 종목 조회는 무거우므로 — market → tickers).
         self._universe_cache: dict[Market, list[str]] = {}
+        #: inquire-price 단기 TTL 캐시 — ticker → (조회시각, output dict). quote·fundamentals 공유.
+        self._price_cache: dict[str, tuple[datetime, dict[str, Any]]] = {}
 
     # ── 유니버스/이름 ─────────────────────────────────────────────────
 
     def list_universe(self, market: Market) -> list[str]:
-        """'조회 가능한 종목 전체'(FIX-B) — KR=KOSPI+KOSDAQ, US=NASDAQ/NYSE 보통주.
+        """'거래대금 상위 N 종목'(시장별) — 유동성 상위만 스캔해 속도 확보.
 
-        - KR: ``pykrx`` 로 KOSPI∪KOSDAQ 상장 티커 전체.
-        - US: NASDAQ Trader 심볼덤프(nasdaqlisted/otherlisted)에서 보통주만 파싱.
-        - 둘 다 실패하면 ``_universe_from_themes`` 로 graceful fallback(운영자 큐레이션).
+        - KR: ``pykrx`` 벌크 1~2콜로 KOSPI∪KOSDAQ 전 종목 거래대금 → 상위 N 티커.
+        - US: 유동성 큰 정적 화이트리스트(S&P 500 + 대형주)에서 상위 N(거래대금 순위
+          무료 단일소스 부재 → 대형주 근사).
+        - 둘 다 비면 ``_universe_from_themes`` 로 graceful fallback(운영자 큐레이션).
 
         전 종목 조회는 무거우므로 인스턴스 1회만 수행하고 캐시한다.
-
-        성능 메모: 전 종목 라이브 스캔(수천 종목 × KIS/yfinance 호출)은 30분 주기에서
-        무거우므로 일봉 캐시가 후속 과제다(README 참조). 본 메서드는 유니버스만 넓힌다.
         """
         if market in self._universe_cache:
             return self._universe_cache[market]
@@ -601,34 +971,52 @@ class LiveProvider:
         return result
 
     def _fetch_universe_kr(self) -> list[str]:
-        """pykrx 로 KOSPI∪KOSDAQ 상장 티커 전체. 실패 시 빈 리스트(→ themes fallback)."""
-        try:
-            from pykrx import stock  # lazy import — 미설치/ARM 미지원 환경 보호
+        """pykrx 벌크 조회로 거래대금 상위 N 티커. 실패 시 빈 리스트(→ themes fallback).
 
-            kospi = stock.get_market_ticker_list(market="KOSPI")
-            kosdaq = stock.get_market_ticker_list(market="KOSDAQ")
-        except Exception:  # pykrx 임의 예외는 fallback 으로 흡수(graceful)
+        KOSPI·KOSDAQ 각각 ``get_market_ohlcv_by_ticker`` 1콜(전 종목, '거래대금' 컬럼)로
+        받아 concat → '거래대금' 내림차순 → 상위 ``live_universe_top_n``. 데이터가 비면
+        직전 영업일로 1회 재시도한다. **개별 종목 루프 조회 금지(벌크만).**
+        """
+        try:
+            import pandas as pd  # lazy import
+            from pykrx import stock  # 미설치/ARM 미지원 환경 보호
+
+            bday = stock.get_nearest_business_day_in_a_week()
+            frame = self._kr_turnover_frame(stock, pd, bday)
+            if frame is None or frame.empty:
+                # 직전 영업일 재시도(휴장·데이터 지연 대비).
+                prev = stock.get_nearest_business_day_in_a_week(
+                    (datetime.now(tz=UTC) - timedelta(days=1)).strftime("%Y%m%d")
+                )
+                frame = self._kr_turnover_frame(stock, pd, prev)
+        except Exception:  # pykrx/pandas 임의 예외는 fallback 으로 흡수(graceful)
             logger.warning("pykrx 유니버스 조회 실패 — themes.yml fallback", exc_info=True)
             return []
-        return _dedup(str(t) for t in (*kospi, *kosdaq) if str(t).strip())
+        if frame is None or frame.empty:
+            return []
+        top = frame.sort_values("거래대금", ascending=False).head(
+            self._settings.live_universe_top_n
+        )
+        return _dedup(str(t).zfill(6) for t in top.index if str(t).strip())
+
+    @staticmethod
+    def _kr_turnover_frame(stock: Any, pd: Any, bday: str) -> Any:
+        """KOSPI∪KOSDAQ 전 종목 거래대금 DataFrame(벌크 2콜). 데이터 비면 빈 프레임."""
+        kospi = stock.get_market_ohlcv_by_ticker(bday, market="KOSPI")
+        kosdaq = stock.get_market_ohlcv_by_ticker(bday, market="KOSDAQ")
+        frames = [f for f in (kospi, kosdaq) if f is not None and not f.empty and "거래대금" in f]
+        if not frames:
+            return None
+        return pd.concat(frames)
 
     def _fetch_universe_us(self) -> list[str]:
-        """NASDAQ Trader 심볼덤프에서 US 보통주 전체. 실패 시 빈 리스트(→ themes fallback).
+        """유동성 큰 정적 화이트리스트에서 상위 N(거래대금 상위 근사).
 
-        - ``nasdaqlisted.txt``: NASDAQ 상장. ``otherlisted.txt``: NYSE/AMEX 등.
-        - 테스트이슈('Y') 제외, ETF('Y') 제외 → 보통주만. (보장: 파일 헤더 기준 컬럼.)
+        US 거래대금 순위 무료 단일소스가 없어 S&P 500 + 주요 대형주 화이트리스트
+        (``_US_LIQUID``)를 '거래대금 상위'의 안전한 근사로 쓴다. 정적이라 실패 없음;
+        그래도 빈 경우(상수 변형) themes fallback 이 받친다.
         """
-        symbols: list[str] = []
-        for url, sym_col in _NASDAQ_DUMPS:
-            try:
-                resp = self._client.get(url, timeout=20.0)
-                resp.raise_for_status()
-                text = resp.text
-            except httpx.HTTPError:
-                logger.warning("NASDAQ 심볼덤프 조회 실패: %s — fallback", url, exc_info=True)
-                return []
-            symbols.extend(_parse_nasdaq_dump(text, sym_col))
-        return _dedup(symbols)
+        return list(_US_LIQUID[: self._settings.live_universe_top_n])
 
     def get_name(self, ticker: str, market: Market) -> str:
         """KIS/yfinance 종목명."""
@@ -737,11 +1125,11 @@ class LiveProvider:
 
     def _kis_quote(self, ticker: str) -> Quote:
         quote = self._kis_quote_once(ticker)
-        # 시세 글리치 가드 — 전일 종가 대비 ±50% 밖이면 1회 재조회.
+        # 시세 글리치 가드 — 전일 종가 대비 ±50% 밖이면 1회 재조회(캐시 우회로 강제).
         if quote.prev_close and quote.prev_close > _DEC0:
             ratio = quote.price / quote.prev_close
             if ratio < _GLITCH_LOW or ratio > _GLITCH_HIGH:
-                quote = self._kis_quote_once(ticker)
+                quote = self._kis_quote_once(ticker, force=True)
                 # FIX-D: 재조회 후에도 ±50% 밖이면 글리치로 보고 스킵(무조건 채택 금지).
                 if quote.prev_close and quote.prev_close > _DEC0:
                     ratio2 = quote.price / quote.prev_close
@@ -751,13 +1139,28 @@ class LiveProvider:
                         )
         return quote
 
-    def _kis_quote_once(self, ticker: str) -> Quote:
+    def _kis_inquire_price(self, ticker: str, *, force: bool = False) -> dict[str, Any]:
+        """KIS inquire-price(FHKST01010100) 단일 진입점 — 단기 TTL 캐시로 중복 제거.
+
+        quote·fundamentals 가 같은 호출을 공유한다(KR 종목당 2콜→1콜). ``force`` 면 캐시를
+        무시하고 재조회한다(글리치 재조회 경로). 스레드 경쟁은 무해(마지막 쓰기 승) — Lock 불필요.
+        """
+        now = datetime.now(tz=UTC)
+        if not force:
+            cached = self._price_cache.get(ticker)
+            if cached is not None and now - cached[0] < _PRICE_TTL:
+                return cached[1]
         data = self._kis_get(
             "/uapi/domestic-stock/v1/quotations/inquire-price",
             tr_id="FHKST01010100",
             params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": ticker},
         )
-        out = data.get("output") or {}
+        out: dict[str, Any] = data.get("output") or {}
+        self._price_cache[ticker] = (now, out)
+        return out
+
+    def _kis_quote_once(self, ticker: str, *, force: bool = False) -> Quote:
+        out = self._kis_inquire_price(ticker, force=force)
         try:
             price = _d(out["stck_prpr"])
             opn = _d(out["stck_oprc"]) if out.get("stck_oprc") else None
@@ -811,13 +1214,8 @@ class LiveProvider:
         )
 
     def _kis_fundamentals(self, ticker: str) -> Fundamentals:
-        # 현재가 응답(output)에 시총·PER·52주고저가 함께 온다.
-        data = self._kis_get(
-            "/uapi/domestic-stock/v1/quotations/inquire-price",
-            tr_id="FHKST01010100",
-            params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": ticker},
-        )
-        out = data.get("output") or {}
+        # 현재가 응답(output)에 시총·PER·52주고저가 함께 온다 — quote 와 같은 호출 공유(중복 제거).
+        out = self._kis_inquire_price(ticker)
 
         def opt(key: str) -> Decimal | None:
             val = out.get(key)
@@ -856,22 +1254,21 @@ class LiveProvider:
     # ── 투자자별 매매 ─────────────────────────────────────────────────
 
     def get_investor_flow(self, ticker: str) -> InvestorFlow | None:
-        """KIS 투자자별 매매동향 — 매수·매도 **거래대금(KRW)** + 순매수 (KR 전용).
+        """KIS 투자자별 매매동향 — **순매수 거래대금(KRW)** (KR 전용).
 
-        FIX-A: 사용자 요구는 '외국인/기관/개인별 매수금+매도금(거래대금) 합산'이다.
-        따라서 **수량(``*_ntby_qty``) 필드 사용을 중단**하고 거래대금(``*_tr_pbmn``)을
-        읽어 ``*_buy``/``*_sell`` 을 채우고 ``*_net = 매수금 − 매도금`` 으로 산출한다.
+        FIX: ``inquire-investor``(FHKST01010900)는 매수/매도 분리 거래대금을 주지 않고
+        **순매수 거래대금**만 준다. 따라서 추정 필드(``*_shnu_tr_pbmn``/``*_seln_tr_pbmn``)
+        대신 순매수 필드 ``frgn_ntby_tr_pbmn``/``orgn_ntby_tr_pbmn``/``prsn_ntby_tr_pbmn``
+        (KRW)로 ``*_net`` 만 채운다. ``*_buy``/``*_sell`` 은 ``None``(프론트가 net 만 표시로
+        폴백). 세 net 이 모두 결측이면 ``None`` 을 반환한다(raise 금지).
 
-        TODO(KIS Developers 확정 필요): 아래 TR_ID·엔드포인트·필드명은 추정치다.
-        '종목별 외국인·기관 매매동향'(매수/매도 거래대금 포함) API 를 KIS Developers
-        문서로 확정해 ``_INVESTOR_*`` 매핑을 교정할 것. 필드 부재/파싱 실패 시
-        ``LiveProviderError`` 를 던져 엔진이 per-ticker 로 흡수하게 한다(무음 0 금지).
+        주석: 매수/매도 분리 금액은 본 API 가 제공하지 않으므로 별도 추정집계 API 가
+        필요하다(TODO).
 
         US 심볼 형태면 ``None``.
         """
         if not (len(ticker) == 6 and ticker.isdigit()):
             return None
-        # TODO(KIS): 일자별 종목별 투자자 매매동향 엔드포인트·TR_ID 확정 필요(표준 경로 추정).
         data = self._kis_get(
             "/uapi/domestic-stock/v1/quotations/inquire-investor",
             tr_id="FHKST01010900",
@@ -882,69 +1279,75 @@ class LiveProvider:
             return None
         rec = rows[0]  # 최신 일자
 
-        def amount(key: str) -> Decimal:
-            """거래대금 필드(KRW). 키 부재/빈값이면 LiveProviderError(무음 0 금지)."""
+        def net(key: str) -> Decimal | None:
+            """순매수 거래대금 필드(KRW). 부재/빈값이면 None."""
             val = rec.get(key)
             if val in (None, ""):
-                # TODO(KIS): 실제 매수/매도 거래대금 필드명 확정 시 이 가드도 갱신.
-                raise LiveProviderError(f"KIS 투자자 거래대금 필드 부재: {key} ({ticker})")
+                return None
             return _d(val)
 
+        foreign_net = net("frgn_ntby_tr_pbmn")
+        institution_net = net("orgn_ntby_tr_pbmn")
+        individual_net = net("prsn_ntby_tr_pbmn")
+        # 세 net 이 모두 결측이면 무음 None(raise 금지 — 엔진이 None 으로 처리).
+        if foreign_net is None and institution_net is None and individual_net is None:
+            return None
         bsop = rec.get("stck_bsop_date")
         flow_date = (
             datetime.strptime(bsop, "%Y%m%d").replace(tzinfo=UTC).date()
             if bsop
             else datetime.now(tz=UTC).date()
         )
-        # 매수/매도 거래대금(추정 필드명) — *_shnu_tr_pbmn(매수대금)/ *_seln_tr_pbmn(매도대금).
-        foreign_buy = amount("frgn_shnu_tr_pbmn")
-        foreign_sell = amount("frgn_seln_tr_pbmn")
-        institution_buy = amount("orgn_shnu_tr_pbmn")
-        institution_sell = amount("orgn_seln_tr_pbmn")
-        individual_buy = amount("prsn_shnu_tr_pbmn")
-        individual_sell = amount("prsn_seln_tr_pbmn")
         return InvestorFlow(
             date=flow_date,
-            foreign_net=foreign_buy - foreign_sell,
-            institution_net=institution_buy - institution_sell,
-            individual_net=individual_buy - individual_sell,
-            foreign_buy=foreign_buy,
-            foreign_sell=foreign_sell,
-            institution_buy=institution_buy,
-            institution_sell=institution_sell,
-            individual_buy=individual_buy,
-            individual_sell=individual_sell,
+            foreign_net=foreign_net or _DEC0,
+            institution_net=institution_net or _DEC0,
+            individual_net=individual_net or _DEC0,
+            foreign_buy=None,
+            foreign_sell=None,
+            institution_buy=None,
+            institution_sell=None,
+            individual_buy=None,
+            individual_sell=None,
         )
 
     # ── KIS 저수준 ────────────────────────────────────────────────────
 
     def _ensure_token(self) -> str:
-        """OAuth 토큰 발급/캐시 (만료 60초 전 갱신)."""
+        """OAuth 토큰 발급/캐시 (만료 60초 전 갱신).
+
+        동시성: ``_token_lock`` 으로 발급을 직렬화해 병렬 수집 중 중복 발급을 막는다.
+        락 획득 후 유효 토큰을 재확인(double-checked)해 대기 중 갱신된 토큰을 재사용한다.
+        """
         now = datetime.now(tz=UTC)
         if self._token and self._token_exp and now < self._token_exp:
             return self._token
         if not (self._settings.kis_app_key and self._settings.kis_app_secret):
             raise LiveProviderError("KIS 키 미설정 (KIS_APP_KEY/KIS_APP_SECRET)")
-        try:
-            resp = self._client.post(
-                "/oauth2/tokenP",
-                json={
-                    "grant_type": "client_credentials",
-                    "appkey": self._settings.kis_app_key,
-                    "appsecret": self._settings.kis_app_secret,
-                },
-            )
-            resp.raise_for_status()
-            payload = resp.json()
-        except (httpx.HTTPError, ValueError) as exc:
-            raise LiveProviderError("KIS 토큰 발급 실패") from exc
-        token = payload.get("access_token")
-        if not token:
-            raise LiveProviderError("KIS 토큰 응답에 access_token 없음")
-        ttl = int(payload.get("expires_in", 86400))
-        self._token = str(token)
-        self._token_exp = now + timedelta(seconds=max(ttl - 60, 60))
-        return self._token
+        with self._token_lock:
+            now = datetime.now(tz=UTC)
+            if self._token and self._token_exp and now < self._token_exp:
+                return self._token
+            try:
+                resp = self._client.post(
+                    "/oauth2/tokenP",
+                    json={
+                        "grant_type": "client_credentials",
+                        "appkey": self._settings.kis_app_key,
+                        "appsecret": self._settings.kis_app_secret,
+                    },
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+            except (httpx.HTTPError, ValueError) as exc:
+                raise LiveProviderError("KIS 토큰 발급 실패") from exc
+            token = payload.get("access_token")
+            if not token:
+                raise LiveProviderError("KIS 토큰 응답에 access_token 없음")
+            ttl = int(payload.get("expires_in", 86400))
+            self._token = str(token)
+            self._token_exp = now + timedelta(seconds=max(ttl - 60, 60))
+            return self._token
 
     @retry(
         retry=retry_if_exception_type(httpx.HTTPError),
@@ -986,9 +1389,24 @@ class LiveProvider:
     def _yf_fast_info(self, ticker: str) -> dict[str, Any]:
         import yfinance as yf
 
+        # FIX: fast_info 는 속성 접근(snake_case)으로 읽는다. 이전엔 ``fast.keys()``
+        # (camelCase: lastPrice 등)로 dict 를 만들어 ``_yf_quote``/``_yf_fundamentals``
+        # 의 snake_case 키(last_price/market_cap/year_high/year_low)와 불일치 → KeyError.
+        keys = (
+            "last_price",
+            "previous_close",
+            "open",
+            "day_high",
+            "day_low",
+            "last_volume",
+            "market_cap",
+            "year_high",
+            "year_low",
+            "shares",
+        )
         try:
             fast = yf.Ticker(ticker).fast_info
-            return {k: fast[k] for k in fast.keys()}  # noqa: SIM118 — mapping proxy
+            return {k: getattr(fast, k, None) for k in keys}
         except Exception as exc:
             raise LiveProviderError(f"yfinance fast_info 실패: {ticker}") from exc
 

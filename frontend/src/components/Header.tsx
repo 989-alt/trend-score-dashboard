@@ -26,16 +26,21 @@ export function Header({
         <div className={styles.brand}>
           <div className={styles.logo} aria-hidden="true">
             <svg viewBox="0 0 32 32" width="28" height="28">
-              <rect width="32" height="32" rx="7" fill="#0f172a" />
+              <rect
+                className={styles.logoBg}
+                width="32"
+                height="32"
+                rx="7"
+              />
               <path
+                className={styles.logoLine}
                 d="M6 22 L13 14 L18 18 L26 8"
                 fill="none"
-                stroke="#22c55e"
                 strokeWidth="2.5"
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
-              <circle cx="26" cy="8" r="2.4" fill="#22c55e" />
+              <circle className={styles.logoDot} cx="26" cy="8" r="2.4" />
             </svg>
           </div>
           <div className={styles.titles}>

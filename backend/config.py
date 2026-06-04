@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
     refresh_interval_min: int = 30
 
+    # ── 라이브 스캔 성능 ───────────────────────────────────────────────
+    #: 유니버스 = 거래대금 상위 N(시장별). 전 종목 대신 유동성 상위만 스캔해 속도 확보.
+    live_universe_top_n: int = Field(default=300, ge=1)
+    #: per-ticker 데이터 수집 동시성(ThreadPoolExecutor worker 수).
+    max_workers: int = Field(default=8, ge=1)
+
     # ── 추세추종 하드필터 + 점수 파라미터 (swing-bot default_trend_config 동일) ──
     min_turnover_krw: Decimal = Decimal("10000000000")  # 100억 (KR 거래대금 KRW 임계)
     min_turnover_usd: Decimal = Decimal("30000000")  # 3천만 USD (US 거래대금 임계)
