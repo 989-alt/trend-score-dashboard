@@ -1,0 +1,63 @@
+.wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 120px;
+}
+
+.compact {
+  min-width: 90px;
+  gap: 6px;
+}
+
+.track {
+  flex: 1;
+  height: 8px;
+  background: #eef0f3;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.compact .track {
+  height: 6px;
+}
+
+.fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.4s ease;
+}
+
+.high {
+  background: linear-gradient(90deg, #16a34a, #22c55e);
+}
+
+.mid {
+  background: linear-gradient(90deg, #2563eb, #3b82f6);
+}
+
+.low {
+  background: linear-gradient(90deg, #d97706, #f59e0b);
+}
+
+.weak {
+  background: #c4c9d2;
+}
+
+.alert {
+  background: linear-gradient(90deg, #b91c1c, #ef4444);
+}
+
+.value {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  min-width: 22px;
+  text-align: right;
+}
+
+.compact .value {
+  font-size: 11px;
+  min-width: 18px;
+}

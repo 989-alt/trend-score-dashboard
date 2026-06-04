@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# 환경/시크릿 — 절대 커밋 금지
+.env
+.env.local
+
+# 런타임 데이터 (캐시·스냅샷·SQLite)
+data/*.db
+data/*.sqlite3
+data/cache/
+data/snapshots/
+logs/
+
+# 프론트엔드
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+*.local
+
+# OS/IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

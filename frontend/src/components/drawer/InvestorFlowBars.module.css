@@ -1,0 +1,150 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.bars {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.barRow {
+  display: grid;
+  grid-template-columns: 48px 1fr 132px;
+  align-items: center;
+  gap: 10px;
+}
+
+.label {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.axis {
+  position: relative;
+  display: flex;
+  height: 16px;
+  background: var(--surface-2);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.center {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border-strong);
+  z-index: 1;
+}
+
+.half {
+  position: relative;
+  flex: 1;
+  display: flex;
+}
+
+.half:first-of-type {
+  justify-content: flex-end;
+}
+
+.bar {
+  height: 100%;
+}
+
+.pos {
+  background: linear-gradient(90deg, #34d399, #16a34a);
+  border-radius: 0 3px 3px 0;
+}
+
+.neg {
+  background: linear-gradient(90deg, #b91c1c, #f87171);
+  border-radius: 3px 0 0 3px;
+}
+
+.amounts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: right;
+}
+
+.gross {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 6px;
+  row-gap: 1px;
+  align-items: baseline;
+}
+
+.gLabel {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  text-align: left;
+}
+
+.gValue {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.netLine {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 6px;
+  align-items: baseline;
+  margin-top: 2px;
+  padding-top: 2px;
+  border-top: 1px solid var(--border);
+}
+
+.value {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.up {
+  color: var(--up);
+}
+
+.down {
+  color: var(--down);
+}
+
+.notProvided {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 12px;
+  background: var(--surface-2);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.naDash {
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.naHint {
+  font-size: 11.5px;
+  color: var(--text-faint);
+}

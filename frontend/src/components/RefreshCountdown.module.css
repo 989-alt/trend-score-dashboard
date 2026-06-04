@@ -1,0 +1,82 @@
+.wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.line {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.label {
+  color: var(--text-faint);
+}
+
+.value {
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.sep {
+  color: var(--border-strong);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  font-weight: 600;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--brand-weak);
+  border-color: #c8dbff;
+  color: var(--brand);
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.spin {
+  display: inline-block;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.spinning {
+  animation: rotate 0.8s linear infinite;
+}
+
+.btnText {
+  letter-spacing: -0.01em;
+}
+
+@keyframes rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}

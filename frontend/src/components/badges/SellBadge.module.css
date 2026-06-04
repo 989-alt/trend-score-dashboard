@@ -1,0 +1,41 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--alert);
+  background: var(--alert-bg);
+  border: 1px solid var(--alert-border);
+  white-space: nowrap;
+}
+
+.sm {
+  padding: 2px 8px;
+  font-size: 11px;
+  gap: 4px;
+}
+
+.icon {
+  font-size: 12px;
+}
+
+.label {
+  letter-spacing: -0.01em;
+}
+
+.reason {
+  font-weight: 500;
+  font-size: 11px;
+  color: var(--down);
+  opacity: 0.85;
+  border-left: 1px solid var(--alert-border);
+  padding-left: 6px;
+}
+
+.sm .reason {
+  padding-left: 4px;
+}

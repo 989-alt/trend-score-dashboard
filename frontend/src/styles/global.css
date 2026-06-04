@@ -1,0 +1,106 @@
+:root {
+  /* Light minimal white palette */
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --surface-2: #fbfcfd;
+  --border: #e6e8ec;
+  --border-strong: #d4d7dd;
+  --text: #1a1d23;
+  --text-muted: #5b6373;
+  --text-faint: #8a92a3;
+
+  --brand: #2563eb;
+  --brand-weak: #eff4ff;
+
+  --up: #15803d;
+  --up-bg: #e9f7ef;
+  --down: #b91c1c;
+  --down-bg: #fdecec;
+  --flat: #6b7280;
+
+  /* Grade colors (always paired with a text label + icon, never color-only) */
+  --grade-strong: #15803d;
+  --grade-strong-bg: #e6f6ec;
+  --grade-buy: #2563eb;
+  --grade-buy-bg: #eaf1ff;
+  --grade-hold: #b45309;
+  --grade-hold-bg: #fdf3e7;
+  --grade-avoid: #6b7280;
+  --grade-avoid-bg: #f1f3f6;
+  --grade-sell: #b91c1c;
+  --grade-sell-bg: #fdecec;
+
+  --alert: #b91c1c;
+  --alert-bg: #fff1f1;
+  --alert-border: #f6c5c5;
+
+  --radius: 10px;
+  --radius-sm: 6px;
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-md: 0 4px 16px rgba(16, 24, 40, 0.08);
+  --shadow-lg: 0 12px 40px rgba(16, 24, 40, 0.16);
+
+  --font:
+    "Inter", "Pretendard", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --mono: "SF Mono", "JetBrains Mono", "Roboto Mono", ui-monospace, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+a {
+  color: inherit;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Screen-reader-only utility */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

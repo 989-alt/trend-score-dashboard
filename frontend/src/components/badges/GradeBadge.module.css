@@ -1,0 +1,56 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.sm {
+  padding: 2px 7px;
+  font-size: 11px;
+}
+
+.icon {
+  font-size: 10px;
+  letter-spacing: -1px;
+}
+
+.label {
+  letter-spacing: -0.01em;
+}
+
+.strong_buy {
+  color: var(--grade-strong);
+  background: var(--grade-strong-bg);
+  border-color: #bfe6cd;
+}
+
+.buy {
+  color: var(--grade-buy);
+  background: var(--grade-buy-bg);
+  border-color: #c8dbff;
+}
+
+.hold {
+  color: var(--grade-hold);
+  background: var(--grade-hold-bg);
+  border-color: #f1ddc0;
+}
+
+.avoid {
+  color: var(--grade-avoid);
+  background: var(--grade-avoid-bg);
+  border-color: #dfe3e9;
+}
+
+.sell {
+  color: var(--grade-sell);
+  background: var(--grade-sell-bg);
+  border-color: #f3c9c9;
+}

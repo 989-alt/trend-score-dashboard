@@ -1,0 +1,94 @@
+"""APScheduler 잡 — 일일 prep + intraday 갱신 (market_hours 게이트).
+
+원칙:
+- 스케줄러 timezone 은 ``Asia/Seoul`` 기준(표시·트리거 일관성). 모든 ``now`` 는 tz-aware.
+- intraday 잡은 ``market_hours.is_market_open`` 으로 게이트해 폐장·휴장 시 산출을 건너뛴다.
+- 일일 prep 은 provider 캐시 워밍 겸 ``score_market`` 1회(장 개장 전 갱신).
+- ``refresh_now`` 는 스케줄러와 무관한 동기 1회 산출(초기 부팅·수동 호출용).
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
+
+from backend import market_hours
+from backend.config import Settings
+from backend.engine import score_market
+from backend.market_data import get_provider
+from backend.schemas import Market, Snapshot
+from backend.store import Store
+from backend.themes import load_themes
+
+#: 스케줄러·잡 기준 시간대. 모든 트리거·``now`` 가 이 TZ 를 따른다.
+_SEOUL = ZoneInfo("Asia/Seoul")
+
+#: 일일 prep 시각(KST). US 는 개장 30분 전을 단순화해 22:00 KST 로 둔다.
+_PREP_HOUR: dict[Market, int] = {"KR": 8, "US": 22}
+_PREP_MINUTE: dict[Market, int] = {"KR": 30, "US": 0}
+
+
+def refresh_now(market: Market, store: Store, settings: Settings) -> Snapshot:
+    """``market`` 을 동기로 1회 산출·저장하고 ``Snapshot`` 을 반환(초기/수동).
+
+    ``now`` 는 ``Asia/Seoul`` tz-aware 로 고정한다. ``score_market`` 내부에서
+    ``store.save_snapshot`` 으로 영속되므로 별도 저장은 하지 않는다.
+    """
+    now = datetime.now(tz=_SEOUL)
+    themes = load_themes(settings.themes_path)
+    provider = get_provider(settings)
+    return score_market(market, provider, store, settings, now, themes=themes)
+
+
+def _run_intraday(market: Market, store: Store, settings: Settings) -> None:
+    """intraday 잡 본체 — 장중일 때만 산출. 폐장·휴장이면 조용히 건너뛴다."""
+    now = datetime.now(tz=_SEOUL)
+    if not market_hours.is_market_open(market, now):
+        return
+    refresh_now(market, store, settings)
+
+
+def _run_prep(market: Market, store: Store, settings: Settings) -> None:
+    """일일 prep 잡 본체 — 개장 전 provider 캐시 워밍 겸 1회 산출."""
+    refresh_now(market, store, settings)
+
+
+def build_scheduler(store: Store, settings: Settings) -> AsyncIOScheduler:
+    """``AsyncIOScheduler`` 를 만들어 잡을 등록한 뒤 반환(미시작 상태).
+
+    등록 잡(시장별):
+    - 일일 prep: KR 08:30 / US 22:00 KST 에 ``score_market`` 1회(캐시 워밍).
+    - intraday: ``settings.refresh_interval_min`` (기본 30분) 주기. ``market_hours``
+      로 장중에만 실제 산출.
+
+    호출 측은 반환된 스케줄러의 ``.start()`` 만 호출하면 된다.
+    """
+    scheduler = AsyncIOScheduler(timezone=_SEOUL)
+    markets: tuple[Market, ...] = ("KR", "US")
+
+    for market in markets:
+        scheduler.add_job(
+            _run_prep,
+            CronTrigger(
+                hour=_PREP_HOUR[market],
+                minute=_PREP_MINUTE[market],
+                timezone=_SEOUL,
+            ),
+            args=(market, store, settings),
+            id=f"prep-{market}",
+        )
+        scheduler.add_job(
+            _run_intraday,
+            IntervalTrigger(minutes=settings.refresh_interval_min, timezone=_SEOUL),
+            args=(market, store, settings),
+            id=f"intraday-{market}",
+        )
+
+    return scheduler
+
+
+__all__ = ["build_scheduler", "refresh_now"]

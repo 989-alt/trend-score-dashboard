@@ -1,0 +1,36 @@
+[Unit]
+Description=Trend Score Dashboard (FastAPI + static SPA, single process)
+Documentation=file:///home/ubuntu/trend-score-dashboard/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/trend-score-dashboard
+EnvironmentFile=/home/ubuntu/trend-score-dashboard/.env
+Environment=PYTHONUNBUFFERED=1 TZ=Asia/Seoul
+# uvicorn 단일 프로세스가 API + frontend/dist(SPA)를 서빙. APScheduler가 일일 prep + 30분 갱신 잡 구동.
+ExecStart=/home/ubuntu/trend-score-dashboard/.venv/bin/python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/home/ubuntu/trend-score-dashboard/logs/app.log
+StandardError=append:/home/ubuntu/trend-score-dashboard/logs/app.log
+
+# 보안 강화 (swing-bot 교훈 계승)
+NoNewPrivileges=true
+ProtectSystem=strict
+# data(SQLite 스냅샷)·logs 만 쓰기 허용. ProtectHome=read-only + ReadWritePaths 조합
+# (tmpfs 는 status 226/NAMESPACE 실패 사례 — read-only 사용).
+ReadWritePaths=/home/ubuntu/trend-score-dashboard/data /home/ubuntu/trend-score-dashboard/logs
+ProtectHome=read-only
+BindReadOnlyPaths=/home/ubuntu/trend-score-dashboard/.env
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

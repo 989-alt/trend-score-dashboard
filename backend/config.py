@@ -1,0 +1,89 @@
+"""앱 설정 — 환경변수(.env) + 추세추종 파라미터 단일 출처.
+
+값은 swing-bot 의 ``default_trend_config`` / ``Settings`` 와 동일 기본을 따른다.
+시크릿(KIS 키)은 ``.env`` 에서만 읽고 절대 하드코딩하지 않는다.
+"""
+
+from __future__ import annotations
+
+from decimal import Decimal
+from pathlib import Path
+from typing import Literal
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+#: 프로젝트 루트 (이 파일: backend/config.py → 부모의 부모).
+ROOT_DIR: Path = Path(__file__).resolve().parent.parent
+DATA_DIR: Path = ROOT_DIR / "data"
+
+
+class Settings(BaseSettings):
+    """환경변수 + 기본값. ``.env`` 자동 로드."""
+
+    model_config = SettingsConfigDict(
+        env_file=ROOT_DIR / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    # ── 데이터 소스 모드 ───────────────────────────────────────────────
+    #: live = 실 KIS/yfinance, sample = 내장 샘플데이터(키 불필요, 개발·검증용).
+    data_mode: Literal["live", "sample"] = "sample"
+
+    # ── KIS ───────────────────────────────────────────────────────────
+    kis_app_key: str = ""
+    kis_app_secret: str = ""
+    kis_mode: Literal["mock", "real"] = "mock"
+
+    # ── 서버 ───────────────────────────────────────────────────────────
+    host: str = "0.0.0.0"
+    port: int = 8000
+    cors_origins: str = "http://localhost:5173"
+    refresh_interval_min: int = 30
+
+    # ── 추세추종 하드필터 + 점수 파라미터 (swing-bot default_trend_config 동일) ──
+    min_turnover_krw: Decimal = Decimal("10000000000")  # 100억 (KR 거래대금 KRW 임계)
+    min_turnover_usd: Decimal = Decimal("30000000")  # 3천만 USD (US 거래대금 임계)
+    vol_band_low: Decimal = Decimal("0.20")
+    vol_band_high: Decimal = Decimal("0.60")
+    momentum_min: Decimal = Decimal("0")
+    lookback_days: int = 20
+    ma200_window: int = 200
+    pocket_pivot_lookback: int = 10
+    breakout_52w_min: Decimal = Decimal("0.90")
+
+    # 점수 가중치 (합 1.0)
+    weight_52w: Decimal = Decimal("0.30")
+    weight_momentum: Decimal = Decimal("0.25")
+    weight_pocket_pivot: Decimal = Decimal("0.20")
+    weight_turnover: Decimal = Decimal("0.15")
+    weight_vol_fit: Decimal = Decimal("0.10")
+
+    # ── 손절(트레일링) ────────────────────────────────────────────────
+    trailing_stop_pct: Decimal = Decimal("8")
+    #: 트레일링 peak 추적 윈도(일). 무상태 손절 — 최근 N봉 종가 ∪ 현재가의 최고가.
+    trail_window_days: int = 60
+
+    # ── 등급 임계 (점수 0~100) ────────────────────────────────────────
+    grade_strong_buy: Decimal = Decimal("75")
+    grade_buy: Decimal = Decimal("60")
+    grade_hold: Decimal = Decimal("45")
+
+    # ── 테마 ───────────────────────────────────────────────────────────
+    top_n_per_theme: int = Field(default=8, ge=1)
+    themes_path: Path = DATA_DIR / "themes.yml"
+
+    # ── 영속 ───────────────────────────────────────────────────────────
+    db_path: Path = DATA_DIR / "dashboard.db"
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        """CORS 오리진 문자열 → 리스트."""
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+
+def get_settings() -> Settings:
+    """설정 싱글턴 진입점 (테스트에서 monkeypatch 용이)."""
+    return Settings()
