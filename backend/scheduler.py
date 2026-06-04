@@ -45,16 +45,34 @@ def refresh_now(market: Market, store: Store, settings: Settings) -> Snapshot:
 
 
 def _run_intraday(market: Market, store: Store, settings: Settings) -> None:
-    """intraday 잡 본체 — 장중일 때만 산출. 폐장·휴장이면 조용히 건너뛴다."""
+    """intraday 잡 본체 — 장중일 때만 산출. 폐장·휴장이면 조용히 건너뛴다.
+
+    일봉·펀더멘털은 prep 가 채운 일1회 캐시를 재사용(FIX-C) → 시세만 신선하게 받아 빠르고
+    Yahoo 부하 최소. (캐시 미스 종목은 ``get_daily_ohlcv`` 가 per-ticker 폴백으로 흡수.)
+    """
     now = datetime.now(tz=_SEOUL)
     if not market_hours.is_market_open(market, now):
         return
     refresh_now(market, store, settings)
 
 
+def prep_now(market: Market, store: Store, settings: Settings) -> Snapshot:
+    """일봉·펀더멘털 캐시 워밍(배치) 후 1회 산출·저장(FIX-C). 초기 부팅·prep 잡 공용.
+
+    ``provider.prepare_daily`` 가 US 는 ``yf.download`` 배치로 일봉 캐시를 일괄 채워 이후
+    intraday 가 Yahoo 를 거의 안 타게 한다. 그 뒤 ``score_market`` 으로 prep 스냅샷 산출.
+    """
+    provider = get_provider(settings)
+    universe = provider.list_universe(market)
+    provider.prepare_daily(universe, market)
+    now = datetime.now(tz=_SEOUL)
+    themes = load_themes(settings.themes_path)
+    return score_market(market, provider, store, settings, now, themes=themes)
+
+
 def _run_prep(market: Market, store: Store, settings: Settings) -> None:
-    """일일 prep 잡 본체 — 개장 전 provider 캐시 워밍 겸 1회 산출."""
-    refresh_now(market, store, settings)
+    """일일 prep 잡 본체 — ``prep_now`` 위임(배치 워밍 후 산출)."""
+    prep_now(market, store, settings)
 
 
 def build_scheduler(store: Store, settings: Settings) -> AsyncIOScheduler:
@@ -91,4 +109,4 @@ def build_scheduler(store: Store, settings: Settings) -> AsyncIOScheduler:
     return scheduler
 
 
-__all__ = ["build_scheduler", "refresh_now"]
+__all__ = ["build_scheduler", "prep_now", "refresh_now"]

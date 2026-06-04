@@ -7,8 +7,11 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import json
+import tempfile
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -197,7 +200,16 @@ def test_sample_has_both_trends(market: str) -> None:
 
 
 def _live() -> LiveProvider:
-    return LiveProvider(Settings(data_mode="live", kis_app_key="k", kis_app_secret="s"))
+    """mock 파싱용 LiveProvider — DB·토큰 경로를 임시 디렉토리로 격리(프로덕션 data/ 무오염)."""
+    tmp = Path(tempfile.mkdtemp(prefix="tsd-live-"))
+    settings = Settings(
+        data_mode="live",
+        kis_app_key="k",
+        kis_app_secret="s",
+        db_path=tmp / "test.db",
+        kis_token_path=tmp / ".kis_token.json",
+    )
+    return LiveProvider(settings)
 
 
 def test_live_kis_quote_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -269,11 +281,12 @@ def test_live_kis_ohlcv_parsing_sorted(monkeypatch: pytest.MonkeyPatch) -> None:
     assert all(rows[i].date < rows[i + 1].date for i in range(len(rows) - 1))
 
 
-def test_live_kis_investor_flow_net_amounts(monkeypatch: pytest.MonkeyPatch) -> None:
-    """FIX: inquire-investor 는 **순매수 거래대금**만 준다 → ``*_net`` 만 채우고 buy/sell=None.
+def test_live_kis_investor_flow_skips_empty_latest_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FIX-A: output[0](최신일)은 빈 문자열 미정산 → skip 하고 첫 정산 행에서 buy/sell/net.
 
-    매수/매도 분리 거래대금 필드(``*_shnu_tr_pbmn``)는 응답에 없으므로, 순매수 필드
-    ``frgn_ntby_tr_pbmn``/``orgn_ntby_tr_pbmn``/``prsn_ntby_tr_pbmn``(KRW)로 net 을 채운다.
+    응답은 최근 ~30거래일 리스트. 최신일 행은 ``frgn_ntby_tr_pbmn`` 이 ""(빈값)이라
+    건너뛰고, 매수(``_shnu_tr_pbmn``)·매도(``_seln_tr_pbmn``)·순매수(``_ntby_tr_pbmn``)
+    거래대금(KRW)이 채워진 첫 행을 사용한다.
     """
     lp = _live()
 
@@ -281,37 +294,66 @@ def test_live_kis_investor_flow_net_amounts(monkeypatch: pytest.MonkeyPatch) -> 
         return {
             "rt_cd": "0",
             "output": [
+                # output[0] — 최신일, 빈 문자열 미정산(반드시 skip).
+                {
+                    "stck_bsop_date": "20250106",
+                    "frgn_shnu_tr_pbmn": "",
+                    "frgn_seln_tr_pbmn": "",
+                    "frgn_ntby_tr_pbmn": "",
+                    "orgn_ntby_tr_pbmn": "",
+                    "prsn_ntby_tr_pbmn": "",
+                },
+                # 첫 정산 행 — KIS tr_pbmn 은 **백만원** 단위(엔진이 ×1e6 → 원).
                 {
                     "stck_bsop_date": "20250103",
-                    "frgn_ntby_tr_pbmn": "100000000000",  # 외국인 순매수 +1,000억
-                    "orgn_ntby_tr_pbmn": "-30000000000",  # 기관 순매수 -300억
-                    "prsn_ntby_tr_pbmn": "-70000000000",  # 개인 순매수 -700억
-                }
+                    "frgn_shnu_tr_pbmn": "300000",  # 외국인 매수 3,000억원(=300,000백만원)
+                    "frgn_seln_tr_pbmn": "200000",  # 외국인 매도 2,000억원
+                    "frgn_ntby_tr_pbmn": "100000",  # 외국인 순매수 +1,000억원
+                    "orgn_shnu_tr_pbmn": "50000",
+                    "orgn_seln_tr_pbmn": "80000",
+                    "orgn_ntby_tr_pbmn": "-30000",  # 기관 순매수 -300억원
+                    "prsn_shnu_tr_pbmn": "90000",
+                    "prsn_seln_tr_pbmn": "160000",
+                    "prsn_ntby_tr_pbmn": "-70000",  # 개인 순매수 -700억원
+                },
             ],
         }
 
     monkeypatch.setattr(lp, "_kis_get", fake_get)
     flow = lp.get_investor_flow("005930")
     assert isinstance(flow, InvestorFlow)
+    # 빈 최신행을 skip → 첫 정산 행(20250103)의 날짜를 사용.
+    assert flow.date.isoformat() == "2025-01-03"
+    # 순매수 거래대금.
     assert flow.foreign_net == Decimal("100000000000")
     assert flow.institution_net == Decimal("-30000000000")
     assert flow.individual_net == Decimal("-70000000000")
-    # 매수/매도 분리 금액은 이 API 가 주지 않음 → None(프론트는 net 만 표시로 폴백).
-    assert flow.foreign_buy is None
-    assert flow.foreign_sell is None
-    assert flow.institution_buy is None
-    assert flow.individual_sell is None
+    # 매수/매도 거래대금이 채워짐.
+    assert flow.foreign_buy == Decimal("300000000000")
+    assert flow.foreign_sell == Decimal("200000000000")
+    assert flow.institution_buy == Decimal("50000000000")
+    assert flow.institution_sell == Decimal("80000000000")
+    assert flow.individual_buy == Decimal("90000000000")
+    assert flow.individual_sell == Decimal("160000000000")
     # US 형태 심볼은 KIS 호출 전에 None.
     assert lp.get_investor_flow("NVDA") is None
 
 
-def test_live_kis_investor_flow_all_missing_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    """FIX: 순매수 거래대금 세 필드가 모두 결측이면 None 반환(raise 금지)."""
+def test_live_kis_investor_flow_no_settled_row_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FIX-A: 정산 행이 하나도 없으면(전부 빈값) None 반환(raise 금지)."""
     lp = _live()
 
     def fake_get(path: str, *, tr_id: str, params: dict[str, str]) -> dict[str, Any]:
-        # 순매수 거래대금 필드가 전부 부재.
-        return {"rt_cd": "0", "output": [{"stck_bsop_date": "20250103", "frgn_ntby_qty": "5000"}]}
+        # 모든 행이 빈 문자열(미정산).
+        return {
+            "rt_cd": "0",
+            "output": [
+                {"stck_bsop_date": "20250106", "frgn_ntby_tr_pbmn": ""},
+                {"stck_bsop_date": "20250103", "frgn_ntby_tr_pbmn": "0"},
+            ],
+        }
 
     monkeypatch.setattr(lp, "_kis_get", fake_get)
     assert lp.get_investor_flow("005930") is None
@@ -367,16 +409,20 @@ def test_live_us_fundamentals_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_live_us_return_1y_alt_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    """FIX-C: 1년수익률 키가 'fiftyTwoWeekChange'(대체 표기)여도 파싱. 결측이면 None."""
+    """FIX-C: 1년수익률 키가 'fiftyTwoWeekChange'(대체 표기)여도 파싱. 결측이면 None.
+
+    파싱 자체를 검증하므로 캐시 래퍼(get_fundamentals)가 아닌 ``_yf_fundamentals`` 직접 호출.
+    (get_fundamentals 는 일1회 캐시라 같은 날 같은 종목 재호출은 캐시를 돌려줌 — 별도 테스트.)
+    """
     lp = _live()
     monkeypatch.setattr(lp, "_yf_fast_info", lambda ticker: {})
     # 대체 키만 존재.
     monkeypatch.setattr(lp, "_yf_info", lambda ticker: {"fiftyTwoWeekChange": 0.42})
-    f = lp.get_fundamentals("NVDA", "US")
+    f = lp._yf_fundamentals("NVDA")
     assert f.return_1y_pct == Decimal("42.00")
     # 두 키 모두 결측 → None(엔진 OHLCV 폴백).
     monkeypatch.setattr(lp, "_yf_info", lambda ticker: {"trailingPE": 10.0})
-    f2 = lp.get_fundamentals("NVDA", "US")
+    f2 = lp._yf_fundamentals("NVDA")
     assert f2.return_1y_pct is None
 
 
@@ -476,6 +522,249 @@ def test_live_universe_us_top_n_caps_default() -> None:
     us = lp.list_universe("US")
     assert 0 < len(us) <= 300
     assert "MSFT" in us
+
+
+# ---------------------------------------------------------------------------
+# FIX-C: yfinance 일봉 캐시 + 배치 + 백오프 (네트워크 0)
+# ---------------------------------------------------------------------------
+
+
+def test_live_ohlcv_daily_cache_hit_no_refetch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FIX-C: 같은 날 같은 종목 일봉 재호출은 캐시 적중 → 네트워크(_yf_ohlcv) 재호출 안 함."""
+    lp = _live()
+    calls = {"n": 0}
+
+    def fake_yf_ohlcv(ticker: str, days: int) -> list[OHLCVRow]:
+        calls["n"] += 1
+        return [
+            OHLCVRow(
+                date=datetime(2025, 1, 2, tzinfo=UTC).date(),
+                open=Decimal("100"),
+                high=Decimal("101"),
+                low=Decimal("99"),
+                close=Decimal("100"),
+                volume=Decimal("1000000"),
+            )
+        ]
+
+    monkeypatch.setattr(lp, "_yf_ohlcv", fake_yf_ohlcv)
+    first = lp.get_daily_ohlcv("NVDA", "US", 5)
+    second = lp.get_daily_ohlcv("NVDA", "US", 5)
+    assert first == second
+    assert calls["n"] == 1  # 두 번째는 캐시 적중 → fetch 안 함
+
+
+def test_live_prepare_daily_us_batch_download_fills_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FIX-C: prepare_daily(US) 는 yf.download **배치** 1콜로 일봉 캐시를 일괄 채운다.
+
+    배치 후 ``get_daily_ohlcv`` 는 per-ticker ``.history`` 없이 캐시에서 읽는다(네트워크 0).
+    """
+    pd = pytest.importorskip("pandas")
+    lp = _live()
+    dl_calls = {"n": 0}
+
+    # group_by='ticker' 멀티인덱스 컬럼 프레임(2종목) 모사.
+    idx = pd.to_datetime(["2025-01-02", "2025-01-03"])
+    cols = pd.MultiIndex.from_product(
+        [["AAPL", "MSFT"], ["Open", "High", "Low", "Close", "Volume"]]
+    )
+    frame = pd.DataFrame(
+        [
+            [100, 102, 99, 101, 1000, 200, 202, 199, 201, 2000],
+            [101, 103, 100, 102, 1100, 201, 203, 200, 202, 2100],
+        ],
+        index=idx,
+        columns=cols,
+    )
+
+    def fake_download(tickers: list[str], period_days: int) -> Any:
+        dl_calls["n"] += 1
+        assert set(tickers) == {"AAPL", "MSFT"}  # 배치 1콜에 전 종목
+        return frame
+
+    def fail_history(ticker: str, period_days: int) -> Any:
+        raise AssertionError("per-ticker .history 호출됨 — 배치 캐시 미사용")
+
+    monkeypatch.setattr(lp, "_yf_download", fake_download)
+    monkeypatch.setattr(lp, "_yf_history", fail_history)
+
+    lp.prepare_daily(["AAPL", "MSFT"], "US")
+    assert dl_calls["n"] == 1  # 배치 1콜
+
+    rows_aapl = lp.get_daily_ohlcv("AAPL", "US", 5)
+    rows_msft = lp.get_daily_ohlcv("MSFT", "US", 5)
+    assert [str(r.close) for r in rows_aapl] == ["101", "102"]
+    assert [str(r.close) for r in rows_msft] == ["201", "202"]
+
+
+def test_live_prepare_daily_us_skips_already_cached(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FIX-C: 이미 오늘자 캐시가 있으면 배치 다운로드를 호출하지 않는다(중복 방지)."""
+    pd = pytest.importorskip("pandas")
+    lp = _live()
+
+    # AAPL 만 미리 per-ticker 로 캐시 적재.
+    def fake_yf_ohlcv(ticker: str, days: int) -> list[OHLCVRow]:
+        return [
+            OHLCVRow(
+                date=datetime(2025, 1, 2, tzinfo=UTC).date(),
+                open=Decimal("1"),
+                high=Decimal("1"),
+                low=Decimal("1"),
+                close=Decimal("1"),
+                volume=Decimal("1"),
+            )
+        ]
+
+    monkeypatch.setattr(lp, "_yf_ohlcv", fake_yf_ohlcv)
+    lp.get_daily_ohlcv("AAPL", "US", 5)
+
+    dl_calls = {"n": 0}
+
+    def fake_download(tickers: list[str], period_days: int) -> Any:
+        dl_calls["n"] += 1
+        assert tickers == ["MSFT"]  # 이미 캐시된 AAPL 제외, MSFT 만 배치
+        idx = pd.to_datetime(["2025-01-02"])
+        cols = pd.MultiIndex.from_product([["MSFT"], ["Open", "High", "Low", "Close", "Volume"]])
+        return pd.DataFrame([[10, 10, 10, 10, 10]], index=idx, columns=cols)
+
+    monkeypatch.setattr(lp, "_yf_download", fake_download)
+    lp.prepare_daily(["AAPL", "MSFT"], "US")
+    assert dl_calls["n"] == 1
+
+
+def test_live_prepare_daily_us_batch_failure_absorbed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FIX-C: 배치(yf.download) 실패는 흡수 — prepare_daily 가 예외를 던지지 않는다."""
+    lp = _live()
+
+    def boom(tickers: list[str], period_days: int) -> Any:
+        raise RuntimeError("Yahoo 429")
+
+    monkeypatch.setattr(lp, "_yf_download", boom)
+    # 예외 없이 반환(intraday 가 per-ticker 폴백). 캐시는 비어 있음.
+    lp.prepare_daily(["AAPL", "MSFT"], "US")
+    assert lp._cached_ohlcv("AAPL", "US") is None
+
+
+def test_yf_retry_backoff_retries_on_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FIX-C: yfinance 호출은 tenacity 백오프로 일시 오류를 재시도(sleep 패치, 네트워크 0)."""
+    import sys
+    import time as _time
+
+    # 백오프 sleep 을 no-op 으로 — 테스트 지연 없이 재시도 동작만 검증.
+    monkeypatch.setattr(_time, "sleep", lambda *_a, **_k: None)
+    lp = _live()
+    attempts = {"n": 0}
+
+    class FakeTicker:
+        def __init__(self, ticker: str, session: Any = None) -> None:
+            self._ticker = ticker
+
+        @property
+        def info(self) -> dict[str, Any]:
+            attempts["n"] += 1
+            if attempts["n"] < 3:
+                raise RuntimeError("429 Too Many Requests")
+            return {"shortName": "NVIDIA Corp", "trailingPE": 28.5}
+
+    fake_yf = type(sys)("yfinance")
+    fake_yf.Ticker = FakeTicker  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "yfinance", fake_yf)
+    monkeypatch.setattr(lp, "_session", lambda: None)
+
+    info = lp._yf_info("NVDA")
+    assert info["shortName"] == "NVIDIA Corp"
+    assert attempts["n"] == 3  # 2회 실패 후 3번째 성공(백오프 재시도)
+
+
+# ---------------------------------------------------------------------------
+# FIX-B: LiveProvider 싱글턴 + 토큰 디스크 영속 (네트워크 0)
+# ---------------------------------------------------------------------------
+
+
+def test_get_provider_caches_live_singleton() -> None:
+    """FIX-B: 동일 settings 면 LiveProvider 싱글턴 재사용(한 인스턴스·한 토큰)."""
+    settings = Settings(data_mode="live", kis_app_key="k", kis_app_secret="s")
+    p1 = get_provider(settings)
+    p2 = get_provider(settings)
+    assert isinstance(p1, LiveProvider)
+    assert p1 is p2  # 같은 인스턴스(토큰·캐시 공유)
+    # sample 은 캐시하지 않음(무상태·무비용) — 매번 새 인스턴스.
+    s1 = get_provider(Settings(data_mode="sample"))
+    s2 = get_provider(Settings(data_mode="sample"))
+    assert isinstance(s1, SampleProvider)
+    assert s1 is not s2
+
+
+def test_ensure_token_reuses_disk_token_no_refetch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FIX-B: 디스크에 유효 토큰이 있으면 재발급(POST) 하지 않고 재사용한다(403 회피)."""
+    token_path = tmp_path / ".kis_token.json"
+    expires_at = datetime.now(tz=UTC) + timedelta(hours=12)
+    # 유효 토큰을 디스크에 미리 기록(다른 프로세스/이전 실행 모사).
+    token_path.write_text(
+        json.dumps({"access_token": "disk-token", "expires_at": expires_at.isoformat()}),
+        encoding="utf-8",
+    )
+    settings = Settings(
+        data_mode="live", kis_app_key="k", kis_app_secret="s", kis_token_path=token_path
+    )
+    lp = LiveProvider(settings)
+
+    # 토큰 POST 가 호출되면 실패시킨다 — 디스크 재사용이면 호출되지 않아야 한다.
+    def fail_request() -> dict[str, Any]:
+        raise AssertionError("토큰 재발급(POST)이 호출됨 — 디스크 재사용 실패")
+
+    monkeypatch.setattr(lp, "_request_token", fail_request)
+    assert lp._ensure_token() == "disk-token"
+
+
+def test_ensure_token_issues_and_persists_to_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FIX-B: 디스크 토큰 없으면 신규 발급 후 메모리+디스크에 기록한다."""
+    token_path = tmp_path / ".kis_token.json"
+    settings = Settings(
+        data_mode="live", kis_app_key="k", kis_app_secret="s", kis_token_path=token_path
+    )
+    lp = LiveProvider(settings)
+
+    calls = {"n": 0}
+
+    def fake_request() -> dict[str, Any]:
+        calls["n"] += 1
+        return {"access_token": "fresh-token", "expires_in": 86400}
+
+    monkeypatch.setattr(lp, "_request_token", fake_request)
+    token = lp._ensure_token()
+    assert token == "fresh-token"
+    assert calls["n"] == 1
+    # 디스크에 영속됨.
+    saved = json.loads(token_path.read_text(encoding="utf-8"))
+    assert saved["access_token"] == "fresh-token"
+    assert "expires_at" in saved
+    # 메모리 캐시 적중 — 두 번째 호출은 POST 안 함.
+    assert lp._ensure_token() == "fresh-token"
+    assert calls["n"] == 1
+
+
+def test_ensure_token_disk_expired_triggers_refetch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FIX-B: 디스크 토큰이 만료(60초 이내)면 신규 발급으로 폴백한다."""
+    token_path = tmp_path / ".kis_token.json"
+    # 30초 후 만료 → 60초 여유 안 → 무효.
+    near_exp = datetime.now(tz=UTC) + timedelta(seconds=30)
+    token_path.write_text(
+        json.dumps({"access_token": "stale", "expires_at": near_exp.isoformat()}),
+        encoding="utf-8",
+    )
+    settings = Settings(
+        data_mode="live", kis_app_key="k", kis_app_secret="s", kis_token_path=token_path
+    )
+    lp = LiveProvider(settings)
+    monkeypatch.setattr(lp, "_request_token", lambda: {"access_token": "new", "expires_in": 86400})
+    assert lp._ensure_token() == "new"
 
 
 # ---------------------------------------------------------------------------

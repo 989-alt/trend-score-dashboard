@@ -102,8 +102,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         scheduler.start()
 
         def _initial_scan() -> None:
+            # 부팅 초기 스캔은 prep 경로(일봉 캐시 배치 워밍 후 산출)로 — 장중 부팅 시에도
+            # US ~300종목을 종목당 호출하지 않고 yf.download 배치로 받아 Yahoo 429 회피(FIX-C).
             for market in _MARKETS:
-                sched.refresh_now(market, store, cfg)
+                sched.prep_now(market, store, cfg)
 
         initial_thread = threading.Thread(target=_initial_scan, name="initial-scan", daemon=True)
         initial_thread.start()

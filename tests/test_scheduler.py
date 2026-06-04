@@ -22,6 +22,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from backend import market_hours
 from backend import scheduler as sched
 from backend.config import Settings
+from backend.market_data import SampleProvider
 from backend.schemas import Market
 from backend.store import Store
 
@@ -66,6 +67,33 @@ def test_refresh_now_generated_at_is_seoul_aware(store: Store, settings: Setting
     assert snap.generated_at.utcoffset() == ZoneInfo("Asia/Seoul").utcoffset(
         snap.generated_at.replace(tzinfo=None)
     )
+
+
+# ── prep_now: 캐시 워밍 후 산출 (FIX-C) ──────────────────────────────────────
+
+
+@pytest.mark.parametrize("market", ["KR", "US"])
+def test_prep_now_warms_then_saves_snapshot(
+    market: Market, store: Store, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """prep_now — prepare_daily(캐시 워밍) 를 호출한 뒤 스냅샷을 산출·저장한다(FIX-C)."""
+    warmed: dict[str, object] = {}
+
+    def spy_prepare(self: object, tickers: list[str], mkt: Market) -> None:
+        warmed["market"] = mkt
+        warmed["count"] = len(tickers)
+
+    # SampleProvider.prepare_daily 는 no-op — prep 경로가 실제로 호출하는지 spy 로 확인.
+    monkeypatch.setattr(SampleProvider, "prepare_daily", spy_prepare)
+
+    snap = sched.prep_now(market, store, settings)
+
+    assert warmed["market"] == market
+    assert isinstance(warmed["count"], int) and warmed["count"] > 0  # 유니버스로 워밍 호출
+    assert snap.market == market
+    assert snap.entries
+    loaded = store.load_snapshot(market)
+    assert loaded is not None and loaded == snap
 
 
 # ── build_scheduler: 잡 등록 ─────────────────────────────────────────────────

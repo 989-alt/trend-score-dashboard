@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -21,7 +21,7 @@ from backend.schemas import (
     Snapshot,
     SnapshotCounts,
 )
-from backend.store import Store
+from backend.store import DailyCache, Store
 
 
 def _entry(ticker: str, *, score: str, price: str) -> ScoreEntry:
@@ -89,3 +89,28 @@ def test_creates_parent_directory(tmp_path: Path) -> None:
     nested = tmp_path / "deep" / "nested" / "db.sqlite"
     Store(nested)
     assert nested.parent.is_dir()
+
+
+# ── DailyCache (FIX-C) ───────────────────────────────────────────────────────
+
+
+def test_daily_cache_put_get_roundtrip(tmp_path: Path) -> None:
+    """일봉 캐시 — (market,ticker,asof,kind) 키로 JSON 왕복."""
+    cache = DailyCache(tmp_path / "cache.db")
+    asof = date(2026, 6, 5)
+    assert cache.get("US", "NVDA", asof, "ohlcv") is None  # 미적재
+    cache.put("US", "NVDA", asof, "ohlcv", '{"rows":[]}')
+    assert cache.get("US", "NVDA", asof, "ohlcv") == '{"rows":[]}'
+    # 다른 날짜·종류·시장은 격리(키의 일부가 다르면 별개).
+    assert cache.get("US", "NVDA", date(2026, 6, 4), "ohlcv") is None
+    assert cache.get("US", "NVDA", asof, "fundamentals") is None
+    assert cache.get("KR", "NVDA", asof, "ohlcv") is None
+
+
+def test_daily_cache_upsert(tmp_path: Path) -> None:
+    """같은 키 재저장은 덮어쓰기(upsert)."""
+    cache = DailyCache(tmp_path / "cache.db")
+    asof = date(2026, 6, 5)
+    cache.put("US", "AAPL", asof, "ohlcv", "v1")
+    cache.put("US", "AAPL", asof, "ohlcv", "v2")
+    assert cache.get("US", "AAPL", asof, "ohlcv") == "v2"

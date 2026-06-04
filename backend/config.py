@@ -83,6 +83,8 @@ class Settings(BaseSettings):
 
     # ── 영속 ───────────────────────────────────────────────────────────
     db_path: Path = DATA_DIR / "dashboard.db"
+    #: KIS OAuth 토큰 디스크 캐시(시크릿 — .gitignore). 재시작·다중 프로세스 간 토큰 재사용.
+    kis_token_path: Path = DATA_DIR / ".kis_token.json"
 
     @property
     def cors_origin_list(self) -> list[str]:

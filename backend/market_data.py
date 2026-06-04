@@ -12,12 +12,17 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import json
 import logging
+import os
 import threading
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from zoneinfo import ZoneInfo
 
 import httpx
 import yaml
@@ -26,10 +31,10 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from backend.config import Settings
 from backend.schemas import InvestorFlow, Market, OHLCVRow
+from backend.store import DailyCache
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
-    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -115,12 +120,30 @@ class MarketDataProvider(Protocol):
         """``ticker`` 의 투자자별 매매(외국인/기관/개인). **KR 전용** — US 는 ``None``."""
         ...
 
+    def prepare_daily(self, tickers: list[str], market: Market) -> None:
+        """일봉·펀더멘털 캐시 워밍(일1회 prep). 라이브는 배치로 Yahoo 부하 최소화.
+
+        sample 등 캐시가 불필요한 구현은 no-op. intraday 는 캐시된 일봉을 재사용한다.
+        """
+        ...
+
 
 # ---------------------------------------------------------------------------
 # 공통 헬퍼
 # ---------------------------------------------------------------------------
 
 _DEC0 = Decimal("0")
+
+#: 일봉 캐시 asof_date 계산용 시장 TZ (일1회 캐시가 시장 달력일에 맞춰 롤오버되도록).
+_MARKET_TZ: dict[Market, ZoneInfo] = {
+    "KR": ZoneInfo("Asia/Seoul"),
+    "US": ZoneInfo("America/New_York"),
+}
+
+
+def _market_today(market: Market) -> date:
+    """``market`` 로컬 달력일(오늘) — 일봉 캐시 asof_date 키."""
+    return datetime.now(tz=_MARKET_TZ[market]).date()
 
 
 def _d(value: object) -> Decimal:
@@ -144,6 +167,86 @@ def _dedup(items: Iterable[str]) -> list[str]:
             seen.add(item)
             out.append(item)
     return out
+
+
+def _amount(value: object) -> Decimal | None:
+    """KIS 거래대금 문자열(KRW) → ``Decimal``. 빈문자("")·부재(None)면 ``None``.
+
+    KIS 응답의 빈값은 ``""`` 라 ``Decimal("")`` 이 예외를 던진다 → 반드시 가드.
+    """
+    if value is None or value == "":
+        return None
+    return _d(value)
+
+
+class _OHLCVList(BaseModel):
+    """OHLCVRow 리스트 캐시 직렬화 래퍼 (pydantic JSON 왕복 — Decimal/date 무손실)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rows: list[OHLCVRow]
+
+
+def _extract_ticker_frame(data: Any, ticker: str) -> Any:
+    """``yf.download(group_by='ticker')`` 결과에서 ``ticker`` 단일 종목 프레임 추출.
+
+    멀티종목이면 컬럼 최상위 레벨(=ticker)로 슬라이스, 단일종목이면 그대로. 부재·실패는
+    ``None`` (호출 측이 빈 결과로 처리).
+    """
+    if data is None or getattr(data, "empty", True):
+        return None
+    columns = getattr(data, "columns", None)
+    # MultiIndex 컬럼(멀티종목) → 최상위 레벨에서 ticker 슬라이스.
+    if columns is not None and getattr(columns, "nlevels", 1) > 1:
+        if ticker not in columns.get_level_values(0):
+            return None
+        return data[ticker]
+    # 단일종목(평면 컬럼) — 그대로 사용.
+    return data
+
+
+def _rows_from_yf_frame(hist: Any) -> list[OHLCVRow]:
+    """yfinance OHLCV DataFrame(단일 종목) → ``OHLCVRow`` 리스트(날짜 오름차순).
+
+    ``.history()`` / ``yf.download(group_by='ticker')`` 의 단일 종목 프레임을 공통 파싱한다.
+    NaN 행(휴장·결측)은 건너뛴다. 빈 프레임이면 빈 리스트.
+    """
+    rows: list[OHLCVRow] = []
+    if hist is None or getattr(hist, "empty", True):
+        return rows
+    for idx, rec in hist.iterrows():
+        close = rec.get("Close")
+        if close is None or (isinstance(close, float) and close != close):  # NaN 가드
+            continue
+        rows.append(
+            OHLCVRow(
+                date=idx.date(),
+                open=_d(rec["Open"]),
+                high=_d(rec["High"]),
+                low=_d(rec["Low"]),
+                close=_d(rec["Close"]),
+                volume=_d(rec["Volume"]),
+            )
+        )
+    return rows
+
+
+#: KIS 투자자 매매 거래대금(``*_tr_pbmn``)은 **백만원** 단위 → 원 환산 배수.
+#: (매수금/매수량 ≈ 종가/1e6 으로 실증 확인: 005930·000660 모두 close/ratio ≈ 1,000,000.)
+_INVESTOR_TR_PBMN_UNIT = Decimal("1000000")
+
+
+def _first_settled_flow_row(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """투자자별 매매 ``output`` 리스트에서 **첫 정산 행** 반환.
+
+    최신일(``output[0]``)은 ``frgn_ntby_tr_pbmn`` 이 ""/"0" 으로 미정산이므로,
+    외국인 순매수 거래대금이 0 이 아닌(=정산된) 첫 행을 고른다. 없으면 ``None``.
+    """
+    for rec in rows:
+        net = _amount(rec.get("frgn_ntby_tr_pbmn"))
+        if net is not None and net != _DEC0:
+            return rec
+    return None
 
 
 def _universe_from_themes(themes_path: Path, market: Market) -> list[str]:
@@ -369,6 +472,9 @@ class SampleProvider:
             individual_sell=individual_sell,
         )
 
+    def prepare_daily(self, tickers: list[str], market: Market) -> None:
+        """no-op — 합성 데이터는 결정론·무비용이라 캐시 워밍이 필요 없다."""
+
     # ── 내부 합성 로직 ─────────────────────────────────────────────────
 
     @staticmethod
@@ -518,6 +624,18 @@ _GLITCH_LOW = Decimal("0.5")
 _GLITCH_HIGH = Decimal("1.5")
 #: KIS inquire-price 단기 TTL(초) — quote·fundamentals 가 같은 호출을 공유해 중복 제거.
 _PRICE_TTL = timedelta(seconds=30)
+
+#: 일봉 캐시 종류 키(DailyCache.kind).
+_CACHE_OHLCV = "ohlcv"
+_CACHE_FUND = "fundamentals"
+
+#: yfinance(Yahoo) 429 백오프 — 1·2·4·8·16초, 최대 5회. (FIX-C)
+_yf_retry = retry(
+    retry=retry_if_exception_type(Exception),
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=1, max=16),
+    reraise=True,
+)
 
 #: US '거래대금 상위' 근사 — 유동성 큰 정적 화이트리스트(S&P 500 + 주요 대형주).
 #: 대략 대형주·고유동성 순으로 정렬해 ``head(N)`` 이 가장 유동성 높은 N 을 주도록 한다.
@@ -938,7 +1056,7 @@ class LiveProvider:
     ``tenacity`` 백오프로 처리한다. 키 없거나 호출 실패 시 ``LiveProviderError``.
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, daily_cache: DailyCache | None = None) -> None:
         self._settings = settings
         self._base = _KIS_DOMAINS[settings.kis_mode]
         self._client = httpx.Client(base_url=self._base, timeout=10.0)
@@ -950,6 +1068,10 @@ class LiveProvider:
         self._universe_cache: dict[Market, list[str]] = {}
         #: inquire-price 단기 TTL 캐시 — ticker → (조회시각, output dict). quote·fundamentals 공유.
         self._price_cache: dict[str, tuple[datetime, dict[str, Any]]] = {}
+        #: 일봉·펀더멘털 일1회 캐시(FIX-C). 미주입 시 db_path 로 생성(싱글턴이라 1회).
+        self._daily = daily_cache if daily_cache is not None else DailyCache(settings.db_path)
+        #: yfinance 공유 requests 세션(연결 재사용 → Yahoo 부하·핸드셰이크 절감). lazy.
+        self._yf_session: Any | None = None
 
     # ── 유니버스/이름 ─────────────────────────────────────────────────
 
@@ -1030,35 +1152,53 @@ class LiveProvider:
     # ── OHLCV ─────────────────────────────────────────────────────────
 
     def get_daily_ohlcv(self, ticker: str, market: Market, days: int) -> list[OHLCVRow]:
-        """KIS 국내 일봉 / yfinance 일봉 (날짜 오름차순)."""
-        if market == "US":
-            return self._yf_ohlcv(ticker, days)
-        return self._kis_ohlcv(ticker, days)
+        """KIS 국내 일봉 / yfinance 일봉 (날짜 오름차순). 일1회 캐시(FIX-C).
+
+        같은 날 같은 종목의 일봉은 ``DailyCache``(market+ticker+오늘) 에서 읽어 네트워크를
+        타지 않는다. 캐시에는 충분한 길이(엔진 최대 요청분)를 보관하고, ``days`` 만큼 슬라이스.
+        """
+        cached = self._cached_ohlcv(ticker, market)
+        rows = cached if cached is not None else self._fetch_and_cache_ohlcv(ticker, market, days)
+        return rows[-days:] if days < len(rows) else rows
+
+    def _cached_ohlcv(self, ticker: str, market: Market) -> list[OHLCVRow] | None:
+        """오늘자 일봉 캐시 적중 시 전체 길이 리스트, 미스면 None."""
+        raw = self._daily.get(market, ticker, _market_today(market), _CACHE_OHLCV)
+        if raw is None:
+            return None
+        return _OHLCVList.model_validate_json(raw).rows
+
+    def _store_ohlcv(self, ticker: str, market: Market, rows: list[OHLCVRow]) -> None:
+        """일봉 리스트를 오늘자 캐시에 저장."""
+        payload = _OHLCVList(rows=rows).model_dump_json()
+        self._daily.put(market, ticker, _market_today(market), _CACHE_OHLCV, payload)
+
+    def _fetch_and_cache_ohlcv(self, ticker: str, market: Market, days: int) -> list[OHLCVRow]:
+        """네트워크에서 일봉을 받아 캐시에 저장하고 반환(캐시 미스 경로)."""
+        rows = self._yf_ohlcv(ticker, days) if market == "US" else self._kis_ohlcv(ticker, days)
+        self._store_ohlcv(ticker, market, rows)
+        return rows
 
     def _yf_ohlcv(self, ticker: str, days: int) -> list[OHLCVRow]:
-        import yfinance as yf
-
         # 거래일 < 달력일 → 여유 있게 1.6배 + 5 의 기간을 요청.
         period_days = int(days * 1.6) + 5
         try:
-            hist = yf.Ticker(ticker).history(period=f"{period_days}d", auto_adjust=False)
+            hist = self._yf_history(ticker, period_days)
         except Exception as exc:  # 네트워크/라이브러리 오류를 계약 예외로 변환
             raise LiveProviderError(f"yfinance history 실패: {ticker}") from exc
-        rows: list[OHLCVRow] = []
-        for idx, rec in hist.iterrows():
-            rows.append(
-                OHLCVRow(
-                    date=idx.date(),
-                    open=_d(rec["Open"]),
-                    high=_d(rec["High"]),
-                    low=_d(rec["Low"]),
-                    close=_d(rec["Close"]),
-                    volume=_d(rec["Volume"]),
-                )
-            )
+        rows = _rows_from_yf_frame(hist)
         if not rows:
             raise LiveProviderError(f"yfinance 빈 결과: {ticker}")
-        return rows[-days:] if days < len(rows) else rows
+        return rows
+
+    @_yf_retry
+    def _yf_history(self, ticker: str, period_days: int) -> Any:
+        """yfinance 단일 종목 history (429 백오프). 공유 세션 사용."""
+        import yfinance as yf
+
+        return yf.Ticker(ticker, session=self._session()).history(
+            period=f"{period_days}d", auto_adjust=False
+        )
 
     def _kis_ohlcv(self, ticker: str, days: int) -> list[OHLCVRow]:
         end = datetime.now(tz=UTC).strftime("%Y%m%d")
@@ -1181,9 +1321,20 @@ class LiveProvider:
     # ── 펀더멘털 ──────────────────────────────────────────────────────
 
     def get_fundamentals(self, ticker: str, market: Market) -> Fundamentals:
-        """KIS 밸류에이션 / yfinance info·fast_info."""
+        """KIS 밸류에이션 / yfinance info·fast_info.
+
+        US 펀더멘털(``.info`` 무거움 → Yahoo 429 주범)은 일1회 캐시(FIX-C). KR 은 현재가
+        응답(inquire-price)과 호출을 공유하므로 별도 일캐시 없이 그 단기 TTL 캐시를 쓴다.
+        """
         if market == "US":
-            return self._yf_fundamentals(ticker)
+            cached = self._daily.get(market, ticker, _market_today(market), _CACHE_FUND)
+            if cached is not None:
+                return Fundamentals.model_validate_json(cached)
+            fund = self._yf_fundamentals(ticker)
+            self._daily.put(
+                market, ticker, _market_today(market), _CACHE_FUND, fund.model_dump_json()
+            )
+            return fund
         return self._kis_fundamentals(ticker)
 
     def _yf_fundamentals(self, ticker: str) -> Fundamentals:
@@ -1254,18 +1405,20 @@ class LiveProvider:
     # ── 투자자별 매매 ─────────────────────────────────────────────────
 
     def get_investor_flow(self, ticker: str) -> InvestorFlow | None:
-        """KIS 투자자별 매매동향 — **순매수 거래대금(KRW)** (KR 전용).
+        """KIS 투자자별 매매동향 — 매수·매도·순매수 **거래대금(KRW)** (KR 전용).
 
-        FIX: ``inquire-investor``(FHKST01010900)는 매수/매도 분리 거래대금을 주지 않고
-        **순매수 거래대금**만 준다. 따라서 추정 필드(``*_shnu_tr_pbmn``/``*_seln_tr_pbmn``)
-        대신 순매수 필드 ``frgn_ntby_tr_pbmn``/``orgn_ntby_tr_pbmn``/``prsn_ntby_tr_pbmn``
-        (KRW)로 ``*_net`` 만 채운다. ``*_buy``/``*_sell`` 은 ``None``(프론트가 net 만 표시로
-        폴백). 세 net 이 모두 결측이면 ``None`` 을 반환한다(raise 금지).
+        FIX-A(실증): ``inquire-investor``(FHKST01010900) 응답 ``output`` 은 최근 ~30
+        거래일 리스트다. **최신일(``output[0]``)은 값이 빈 문자열("")로 미정산** 이므로
+        ``frgn_ntby_tr_pbmn`` 이 ""/"0" 이 아닌 **첫 정산 행**을 골라 사용한다.
 
-        주석: 매수/매도 분리 금액은 본 API 가 제공하지 않으므로 별도 추정집계 API 가
-        필요하다(TODO).
+        필드(전부 원/KRW, 빈값은 ""):
+        - ``{frgn|orgn|prsn}_shnu_tr_pbmn`` = 매수 거래대금
+        - ``{frgn|orgn|prsn}_seln_tr_pbmn`` = 매도 거래대금
+        - ``{frgn|orgn|prsn}_ntby_tr_pbmn`` = 순매수 거래대금
 
-        US 심볼 형태면 ``None``.
+        외국인=frgn, 기관=orgn, 개인=prsn 동일 매핑. ``Decimal("")`` 금지 → ``_amount``
+        헬퍼로 빈값/부재는 ``None``. 정산 행이 하나도 없으면 ``None``. ``flow_date`` 는
+        고른 행의 ``stck_bsop_date``. US 심볼 형태면 KIS 호출 전 ``None``.
         """
         if not (len(ticker) == 6 and ticker.isdigit()):
             return None
@@ -1275,23 +1428,18 @@ class LiveProvider:
             params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": ticker},
         )
         rows = data.get("output") or []
-        if not rows:
+        rec = _first_settled_flow_row(rows)
+        if rec is None:
             return None
-        rec = rows[0]  # 최신 일자
 
-        def net(key: str) -> Decimal | None:
-            """순매수 거래대금 필드(KRW). 부재/빈값이면 None."""
-            val = rec.get(key)
-            if val in (None, ""):
-                return None
-            return _d(val)
+        def amt(key: str) -> Decimal | None:
+            """매매금 필드 → 원. KIS ``tr_pbmn`` 은 **백만원** 단위라 1e6 을 곱한다.
 
-        foreign_net = net("frgn_ntby_tr_pbmn")
-        institution_net = net("orgn_ntby_tr_pbmn")
-        individual_net = net("prsn_ntby_tr_pbmn")
-        # 세 net 이 모두 결측이면 무음 None(raise 금지 — 엔진이 None 으로 처리).
-        if foreign_net is None and institution_net is None and individual_net is None:
-            return None
+            빈문자/부재면 None (``Decimal("")`` 금지).
+            """
+            raw = _amount(rec.get(key))
+            return raw * _INVESTOR_TR_PBMN_UNIT if raw is not None else None
+
         bsop = rec.get("stck_bsop_date")
         flow_date = (
             datetime.strptime(bsop, "%Y%m%d").replace(tzinfo=UTC).date()
@@ -1300,24 +1448,91 @@ class LiveProvider:
         )
         return InvestorFlow(
             date=flow_date,
-            foreign_net=foreign_net or _DEC0,
-            institution_net=institution_net or _DEC0,
-            individual_net=individual_net or _DEC0,
-            foreign_buy=None,
-            foreign_sell=None,
-            institution_buy=None,
-            institution_sell=None,
-            individual_buy=None,
-            individual_sell=None,
+            foreign_net=amt("frgn_ntby_tr_pbmn") or _DEC0,
+            institution_net=amt("orgn_ntby_tr_pbmn") or _DEC0,
+            individual_net=amt("prsn_ntby_tr_pbmn") or _DEC0,
+            foreign_buy=amt("frgn_shnu_tr_pbmn"),
+            foreign_sell=amt("frgn_seln_tr_pbmn"),
+            institution_buy=amt("orgn_shnu_tr_pbmn"),
+            institution_sell=amt("orgn_seln_tr_pbmn"),
+            individual_buy=amt("prsn_shnu_tr_pbmn"),
+            individual_sell=amt("prsn_seln_tr_pbmn"),
+        )
+
+    # ── 일봉 캐시 워밍(prep) ───────────────────────────────────────────
+
+    def prepare_daily(self, tickers: list[str], market: Market) -> None:
+        """일봉 캐시 워밍(일1회 prep) — US 는 ``yf.download`` **배치**로 일괄 수집(FIX-C).
+
+        US ~300종목을 종목당 ``.history`` 로 받으면 Yahoo 429. 대신 ``yf.download`` 한 번으로
+        전 종목 일봉을 받아 ``DailyCache`` 에 채운다. 이후 intraday 의 ``get_daily_ohlcv`` 는
+        캐시 적중으로 네트워크를 타지 않는다. 429 등 부분 실패는 흡수(빈 종목은 캐시 미적재 →
+        intraday 가 per-ticker 폴백). KR 은 KIS(429 무관)라 별도 배치 없이 캐시만 채운다.
+        """
+        if market == "US":
+            self._warm_us_daily(tickers)
+            return
+        # KR: KIS 는 Yahoo 429 무관 + 벌크 일봉 API 부재 → 종목별로 캐시만 워밍(실패는 흡수).
+        for ticker in tickers:
+            if self._cached_ohlcv(ticker, market) is not None:
+                continue
+            try:
+                self._fetch_and_cache_ohlcv(ticker, market, self._prep_days())
+            except (LiveProviderError, ValueError, KeyError):
+                logger.warning("KR 일봉 prep 실패(흡수): %s", ticker)
+
+    @staticmethod
+    def _prep_days() -> int:
+        """prep 시 캐시에 보관할 일봉 길이 — 1년치+여유(엔진 최대 요청분 충족)."""
+        return 280
+
+    def _warm_us_daily(self, tickers: list[str]) -> None:
+        """US 일봉 배치 수집 → 종목별 캐시 적재 (``yf.download`` 1콜)."""
+        if not tickers:
+            return
+        # 캐시에 이미 오늘자가 있는 종목은 제외(중복 배치 방지).
+        pending = [t for t in tickers if self._cached_ohlcv(t, "US") is None]
+        if not pending:
+            return
+        period_days = int(self._prep_days() * 1.6) + 5
+        try:
+            data = self._yf_download(pending, period_days)
+        except Exception:  # 배치 실패는 흡수 — intraday 가 per-ticker 로 폴백
+            logger.warning("US 일봉 배치(yf.download) 실패 — per-ticker 폴백", exc_info=True)
+            return
+        for ticker in pending:
+            frame = _extract_ticker_frame(data, ticker)
+            rows = _rows_from_yf_frame(frame)
+            if rows:
+                self._store_ohlcv(ticker, "US", rows)
+
+    @_yf_retry
+    def _yf_download(self, tickers: list[str], period_days: int) -> Any:
+        """yfinance 배치 다운로드(429 백오프). 종목당 ``.history`` 금지 — 1콜로 일괄."""
+        import yfinance as yf
+
+        return yf.download(
+            tickers,
+            period=f"{period_days}d",
+            group_by="ticker",
+            auto_adjust=False,
+            threads=True,
+            progress=False,
+            session=self._session(),
         )
 
     # ── KIS 저수준 ────────────────────────────────────────────────────
 
     def _ensure_token(self) -> str:
-        """OAuth 토큰 발급/캐시 (만료 60초 전 갱신).
+        """OAuth 토큰 확보 — 메모리 캐시 → 디스크 → 신규 발급 (FIX-B).
 
-        동시성: ``_token_lock`` 으로 발급을 직렬화해 병렬 수집 중 중복 발급을 막는다.
-        락 획득 후 유효 토큰을 재확인(double-checked)해 대기 중 갱신된 토큰을 재사용한다.
+        KIS 는 토큰 발급을 약 1분당 1회로 제한(초과 시 403). 재시작·다중 프로세스가
+        매번 새 토큰을 받지 않도록 우선순위를 둔다:
+        1. 메모리 캐시(이 인스턴스가 이미 발급/적재) — 만료 60초 전이면 유효.
+        2. 디스크 캐시(``kis_token_path``) — 만료 60초 전이면 유효, 메모리에 적재 후 재사용.
+        3. 신규 발급 → 메모리+디스크에 기록.
+
+        동시성: ``_token_lock`` 으로 직렬화 + 락 획득 후 재확인(double-checked).
         """
         now = datetime.now(tz=UTC)
         if self._token and self._token_exp and now < self._token_exp:
@@ -1328,18 +1543,14 @@ class LiveProvider:
             now = datetime.now(tz=UTC)
             if self._token and self._token_exp and now < self._token_exp:
                 return self._token
+            # 디스크 캐시 우선 — 다른 프로세스/이전 실행이 받아둔 유효 토큰을 재사용(403 회피).
+            disk = self._load_token_from_disk(now)
+            if disk is not None:
+                self._token, self._token_exp = disk
+                return self._token
             try:
-                resp = self._client.post(
-                    "/oauth2/tokenP",
-                    json={
-                        "grant_type": "client_credentials",
-                        "appkey": self._settings.kis_app_key,
-                        "appsecret": self._settings.kis_app_secret,
-                    },
-                )
-                resp.raise_for_status()
-                payload = resp.json()
-            except (httpx.HTTPError, ValueError) as exc:
+                payload = self._request_token()
+            except httpx.HTTPError as exc:
                 raise LiveProviderError("KIS 토큰 발급 실패") from exc
             token = payload.get("access_token")
             if not token:
@@ -1347,7 +1558,75 @@ class LiveProvider:
             ttl = int(payload.get("expires_in", 86400))
             self._token = str(token)
             self._token_exp = now + timedelta(seconds=max(ttl - 60, 60))
+            self._save_token_to_disk(self._token, self._token_exp)
             return self._token
+
+    @retry(
+        retry=retry_if_exception_type(httpx.HTTPError),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
+        reraise=True,
+    )
+    def _request_token(self) -> dict[str, Any]:
+        """KIS OAuth 토큰 POST — 403/HTTP 오류는 tenacity 백오프 후 ``LiveProviderError``.
+
+        재시도는 일시적 403/네트워크 흔들림 흡수용(최대 3회). 토큰값은 로깅하지 않는다.
+        """
+        try:
+            resp = self._client.post(
+                "/oauth2/tokenP",
+                json={
+                    "grant_type": "client_credentials",
+                    "appkey": self._settings.kis_app_key,
+                    "appsecret": self._settings.kis_app_secret,
+                },
+            )
+            resp.raise_for_status()
+            payload: dict[str, Any] = resp.json()
+        except ValueError as exc:
+            raise LiveProviderError("KIS 토큰 응답 JSON 파싱 실패") from exc
+        return payload
+
+    def _load_token_from_disk(self, now: datetime) -> tuple[str, datetime] | None:
+        """디스크 토큰 캐시 적재 — 만료 60초 전이면 ``(token, expires_at)``, 아니면 ``None``.
+
+        파일 부재·파싱 실패·만료 임박은 모두 ``None`` 으로 흡수(신규 발급 경로로 폴백).
+        토큰 값은 절대 로깅하지 않는다(시크릿).
+        """
+        path = self._settings.kis_token_path
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        try:
+            data = json.loads(raw)
+            token = data["access_token"]
+            expires_at = datetime.fromisoformat(data["expires_at"])
+        except (ValueError, KeyError, TypeError):
+            return None
+        if not token or expires_at.tzinfo is None:
+            return None
+        # 만료 60초 전이면 유효(시간 여유 — 사용 중 만료 방지).
+        if now >= expires_at - timedelta(seconds=60):
+            return None
+        return str(token), expires_at
+
+    def _save_token_to_disk(self, token: str, expires_at: datetime) -> None:
+        """토큰을 디스크에 기록 — ``{access_token, expires_at(ISO)}`` (시크릿, 0600 권한).
+
+        쓰기 실패(권한·디스크)는 무음 흡수(메모리 캐시로 동작 — 영속만 실패).
+        토큰 값은 로깅하지 않는다.
+        """
+        path = self._settings.kis_token_path
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            payload = json.dumps({"access_token": token, "expires_at": expires_at.isoformat()})
+            path.write_text(payload, encoding="utf-8")
+            # 시크릿 — 소유자만 읽기/쓰기(POSIX). Windows 는 chmod 무시(무해).
+            with contextlib.suppress(OSError):
+                os.chmod(path, 0o600)
+        except OSError:
+            logger.warning("KIS 토큰 디스크 저장 실패 — 메모리 캐시로 계속", exc_info=True)
 
     @retry(
         retry=retry_if_exception_type(httpx.HTTPError),
@@ -1377,21 +1656,44 @@ class LiveProvider:
 
     # ── yfinance 저수준 ───────────────────────────────────────────────
 
-    def _yf_info(self, ticker: str) -> dict[str, Any]:
-        import yfinance as yf
+    def _session(self) -> Any:
+        """yfinance 공유 ``requests.Session`` (lazy). 연결 재사용으로 Yahoo 부하 절감."""
+        if self._yf_session is None:
+            import requests
 
+            self._yf_session = requests.Session()
+        return self._yf_session
+
+    def _yf_info(self, ticker: str) -> dict[str, Any]:
+        """yfinance ``.info`` (429 백오프 후 실패는 ``LiveProviderError``). 공유 세션 사용."""
         try:
-            info: dict[str, Any] = dict(yf.Ticker(ticker).info)
+            return self._yf_info_raw(ticker)
         except Exception as exc:
             raise LiveProviderError(f"yfinance info 실패: {ticker}") from exc
-        return info
 
-    def _yf_fast_info(self, ticker: str) -> dict[str, Any]:
+    @_yf_retry
+    def _yf_info_raw(self, ticker: str) -> dict[str, Any]:
+        """yfinance ``.info`` 원천 호출(429 백오프). 예외는 그대로 전파(재시도 트리거)."""
         import yfinance as yf
 
-        # FIX: fast_info 는 속성 접근(snake_case)으로 읽는다. 이전엔 ``fast.keys()``
-        # (camelCase: lastPrice 등)로 dict 를 만들어 ``_yf_quote``/``_yf_fundamentals``
-        # 의 snake_case 키(last_price/market_cap/year_high/year_low)와 불일치 → KeyError.
+        return dict(yf.Ticker(ticker, session=self._session()).info)
+
+    def _yf_fast_info(self, ticker: str) -> dict[str, Any]:
+        """yfinance ``.fast_info`` (429 백오프, 시세용). 공유 세션 사용.
+
+        fast_info 는 속성 접근(snake_case)으로 읽는다 — ``_yf_quote``/``_yf_fundamentals``
+        의 snake_case 키(last_price/market_cap/year_high/year_low)와 일치시킨다.
+        """
+        try:
+            return self._yf_fast_info_raw(ticker)
+        except Exception as exc:
+            raise LiveProviderError(f"yfinance fast_info 실패: {ticker}") from exc
+
+    @_yf_retry
+    def _yf_fast_info_raw(self, ticker: str) -> dict[str, Any]:
+        """yfinance ``.fast_info`` 원천 호출(429 백오프). 예외는 그대로 전파."""
+        import yfinance as yf
+
         keys = (
             "last_price",
             "previous_close",
@@ -1404,22 +1706,33 @@ class LiveProvider:
             "year_low",
             "shares",
         )
-        try:
-            fast = yf.Ticker(ticker).fast_info
-            return {k: getattr(fast, k, None) for k in keys}
-        except Exception as exc:
-            raise LiveProviderError(f"yfinance fast_info 실패: {ticker}") from exc
+        fast = yf.Ticker(ticker, session=self._session()).fast_info
+        return {k: getattr(fast, k, None) for k in keys}
+
+
+#: LiveProvider 싱글턴 캐시 — (settings, provider). 동일 settings 면 한 인스턴스·한 토큰 재사용.
+_live_provider_cache: tuple[Settings, LiveProvider] | None = None
+_provider_lock = threading.Lock()
 
 
 def get_provider(settings: Settings) -> MarketDataProvider:
     """``data_mode`` 에 따라 Provider 선택.
 
-    - ``sample`` → ``SampleProvider`` (키 불필요).
-    - 그 외(``live``) → ``LiveProvider`` (KIS/yfinance).
+    - ``sample`` → ``SampleProvider`` (키 불필요, 매번 새 인스턴스 — 무상태·무비용).
+    - 그 외(``live``) → ``LiveProvider`` **싱글턴**(FIX-B). 동일 ``settings`` 면 캐시된
+      인스턴스를 재사용해 토큰·일봉캐시를 공유한다. 매 스캔/재시작마다 새 인스턴스를
+      만들면 KIS 토큰을 매번 새로 발급(1분당 1회 제한 → 403)하므로 반드시 캐시한다.
     """
     if settings.data_mode == "sample":
         return SampleProvider()
-    return LiveProvider(settings)
+    global _live_provider_cache
+    with _provider_lock:
+        cached = _live_provider_cache
+        if cached is not None and cached[0] == settings:
+            return cached[1]
+        provider = LiveProvider(settings)
+        _live_provider_cache = (settings, provider)
+        return provider
 
 
 __all__ = [
