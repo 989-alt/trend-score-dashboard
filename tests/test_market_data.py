@@ -298,6 +298,15 @@ def test_live_kis_ohlcv_paginates_past_100(monkeypatch: pytest.MonkeyPatch) -> N
     assert all(rows[i].date < rows[i + 1].date for i in range(len(rows) - 1))
 
 
+def test_live_kr_name_cache_and_fallback() -> None:
+    """KR 종목명: pykrx 결과를 인스턴스 캐시에서 읽고, 빈 이름이면 ticker 폴백."""
+    lp = _live()
+    lp._kr_names["005930"] = "삼성전자"  # 캐시 적중 → 해석된 이름
+    assert lp.get_name("005930", "KR") == "삼성전자"
+    lp._kr_names["000000"] = ""  # 빈 이름 → ticker 폴백
+    assert lp.get_name("000000", "KR") == "000000"
+
+
 def test_live_kis_investor_flow_skips_empty_latest_row(monkeypatch: pytest.MonkeyPatch) -> None:
     """FIX-A: output[0](최신일)은 빈 문자열 미정산 → skip 하고 첫 정산 행에서 buy/sell/net.
 

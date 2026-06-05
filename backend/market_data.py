@@ -1072,6 +1072,9 @@ class LiveProvider:
         self._daily = daily_cache if daily_cache is not None else DailyCache(settings.db_path)
         #: yfinance 공유 requests 세션(연결 재사용 → Yahoo 부하·핸드셰이크 절감). lazy.
         self._yf_session: Any | None = None
+        #: KR 한글 종목명 캐시(ticker→name). KIS inquire-price 가 hts_kor_isnm 을 주지
+        #: 않아 pykrx 로 해석 → 인스턴스 1회 캐시(매 스캔 재조회 방지).
+        self._kr_names: dict[str, str] = {}
 
     # ── 유니버스/이름 ─────────────────────────────────────────────────
 
@@ -1144,13 +1147,30 @@ class LiveProvider:
         return list(_US_LIQUID[: self._settings.live_universe_top_n_us])
 
     def get_name(self, ticker: str, market: Market) -> str:
-        """KIS/yfinance 종목명."""
+        """종목명. US=yfinance shortName, KR=pykrx(인스턴스 캐시).
+
+        KIS inquire-price 는 ``hts_kor_isnm``(한글 종목명)을 주지 않아(업종 bstp_kor_isnm
+        만 제공) KR 은 이미 의존성인 pykrx 로 해석한다.
+        """
         if market == "US":
             info = self._yf_info(ticker)
             name = info.get("shortName") or info.get("longName")
             return str(name) if name else ticker
-        fund = self.get_fundamentals(ticker, market)
-        return fund.name or ticker
+        return self._kr_name(ticker) or ticker
+
+    def _kr_name(self, ticker: str) -> str | None:
+        """pykrx 한글 종목명(인스턴스 캐시). 미설치/조회 실패는 흡수 → None(호출부 ticker 폴백)."""
+        if ticker in self._kr_names:
+            return self._kr_names[ticker] or None
+        name = ""
+        try:
+            from pykrx import stock
+
+            name = (stock.get_market_ticker_name(ticker) or "").strip()
+        except Exception:  # pykrx 미설치/ARM·네트워크 실패는 비핵심 → 흡수
+            logger.debug("pykrx 종목명 조회 실패(흡수): %s", ticker)
+        self._kr_names[ticker] = name
+        return name or None
 
     # ── OHLCV ─────────────────────────────────────────────────────────
 
