@@ -6,7 +6,6 @@ board.s-edu.ai.kr {
     encode zstd gzip
     # /api 와 SPA 모두 백엔드(uvicorn)가 처리(단일 출처).
     reverse_proxy 127.0.0.1:8000
-    log {
-        output file /var/log/caddy/trend-board.log
-    }
+    # 접근/에러 로그는 journald 로 (journalctl -u caddy). 별도 파일 로그는
+    # 공식 caddy.service 샌드박스가 /var/log/caddy 쓰기를 막아 기동 실패하므로 사용 안 함.
 }
