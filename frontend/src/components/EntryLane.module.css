@@ -1,8 +1,17 @@
 .lane {
-  background: var(--alert-bg);
-  border: 1px solid var(--alert-border);
   border-radius: var(--radius);
   padding: 14px 16px;
+  border: 1px solid;
+}
+
+.buy {
+  background: var(--up-bg);
+  border-color: rgba(14, 203, 129, 0.38);
+}
+
+.sell {
+  background: var(--alert-bg);
+  border-color: var(--alert-border);
 }
 
 .head {
@@ -13,6 +22,15 @@
 
 .icon {
   font-size: 18px;
+}
+
+.buy .icon,
+.buy .title {
+  color: var(--up);
+}
+
+.sell .icon,
+.sell .title {
   color: var(--alert);
 }
 
@@ -20,13 +38,12 @@
   margin: 0;
   font-size: 14px;
   font-weight: 700;
-  color: var(--alert);
 }
 
 .desc {
   margin: 1px 0 0;
   font-size: 12px;
-  color: var(--down);
+  color: var(--text-muted);
 }
 
 .count {
@@ -38,10 +55,17 @@
   height: 24px;
   padding: 0 7px;
   border-radius: 999px;
-  background: var(--alert);
   color: var(--text);
   font-size: 12px;
   font-weight: 700;
+}
+
+.buy .count {
+  background: var(--up);
+}
+
+.sell .count {
+  background: var(--alert);
 }
 
 .chips {
@@ -57,11 +81,19 @@
   gap: 8px;
   padding: 6px 10px;
   background: var(--surface);
-  border: 1px solid var(--alert-border);
+  border: 1px solid var(--border);
   border-radius: 999px;
   transition:
     box-shadow 0.15s ease,
     transform 0.1s ease;
+}
+
+.buy .chip {
+  border-color: rgba(14, 203, 129, 0.38);
+}
+
+.sell .chip {
+  border-color: var(--alert-border);
 }
 
 .chip:hover {
@@ -79,4 +111,24 @@
   font-family: var(--mono);
   font-size: 11.5px;
   color: var(--text-faint);
+}
+
+.toggle {
+  margin-top: 10px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    color 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.toggle:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
 }

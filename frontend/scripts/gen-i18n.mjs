@@ -47,6 +47,11 @@ const ko = {
   "grade.sell": "매도요구",
   "grade.unknown": "미분류",
 
+  "buyLane.title": "매수 추천",
+  "buyLane.desc": "추세추종 점수 상위 — 매수·적극매수 등급입니다. 클릭하면 상세를 봅니다.",
+  "lane.expand": "+{n}개 더 보기",
+  "lane.collapse": "접기",
+
   "sellAlert.lane.title": "매도 요구 경보",
   "sellAlert.lane.desc": "손절 조건이 발동한 종목입니다. 클릭하면 상세를 봅니다.",
   "sellAlert.badge": "매도요구",

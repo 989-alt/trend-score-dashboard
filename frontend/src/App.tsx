@@ -10,13 +10,14 @@ import {
   tabId,
   type TabKey,
 } from "./components/MarketTabs";
-import { SellAlertLane } from "./components/SellAlertLane";
+import { EntryLane } from "./components/EntryLane";
 import { RankingTable } from "./components/RankingTable";
 import { ThemeBoard } from "./components/ThemeBoard";
 import { DetailDrawer } from "./components/drawer/DetailDrawer";
 import { CountsStrip } from "./components/CountsStrip";
 import { Footer } from "./components/Footer";
 import { ErrorView, LoadingView } from "./components/StateViews";
+import { useT } from "./i18n";
 import styles from "./App.module.css";
 
 const POLL_MS = 30_000;
@@ -28,6 +29,7 @@ function tabToMarket(tab: TabKey): Market | null {
 }
 
 export function App() {
+  const t = useT();
   const [tab, setTab] = useState<TabKey>("themes");
   const [selected, setSelected] = useState<ScoreEntry | null>(null);
 
@@ -68,8 +70,8 @@ export function App() {
 
   const nextRefreshAt = isMarketTab ? (snapshot.data?.nextRefreshAt ?? null) : null;
 
-  // All entries flowing through the active view, for the sell-alert lane.
-  const sellAlertEntries: ScoreEntry[] = useMemo(() => {
+  // All entries flowing through the active view, feeding the buy + sell lanes.
+  const laneEntries: ScoreEntry[] = useMemo(() => {
     if (isMarketTab) return snapshot.data?.entries ?? [];
     if (!themes.data) return [];
     const seen = new Set<string>();
@@ -84,6 +86,20 @@ export function App() {
     }
     return out;
   }, [isMarketTab, snapshot.data, themes.data]);
+
+  // Buy recommendations: buy / strong-buy grades, highest score first.
+  const buyEntries = useMemo(
+    () =>
+      laneEntries
+        .filter((e) => e.grade === "strong_buy" || e.grade === "buy")
+        .sort((a, b) => b.score - a.score),
+    [laneEntries],
+  );
+  // Sell alerts: entries whose trailing-stop / MA200 condition fired.
+  const sellEntries = useMemo(
+    () => laneEntries.filter((e) => e.sellAlert),
+    [laneEntries],
+  );
 
   const showInitialLoading = active.loading && !active.data;
   const showError = !!active.error && !active.data;
@@ -102,7 +118,22 @@ export function App() {
 
         <MarketTabs active={tab} onChange={setTab} />
 
-        <SellAlertLane entries={sellAlertEntries} onSelect={setSelected} />
+        <EntryLane
+          variant="buy"
+          entries={buyEntries}
+          title={t("buyLane.title")}
+          desc={t("buyLane.desc")}
+          icon="▲"
+          onSelect={setSelected}
+        />
+        <EntryLane
+          variant="sell"
+          entries={sellEntries}
+          title={t("sellAlert.lane.title")}
+          desc={t("sellAlert.lane.desc")}
+          icon="⚠"
+          onSelect={setSelected}
+        />
 
         {isMarketTab && snapshot.data && (
           <CountsStrip counts={snapshot.data.counts} />
