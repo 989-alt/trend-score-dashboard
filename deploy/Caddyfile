@@ -1,8 +1,8 @@
 # Caddy 리버스 프록시 — 자동 HTTPS(Let's Encrypt) + 단일 포트 공개.
-# 서브도메인을 실제 도메인으로 교체(예: board.s-edu.ai.kr). DNS A 레코드가 OCI 공인 IP를 가리켜야 함.
+# 사이트 주소는 실제 공개 도메인. DNS A 레코드가 OCI 공인 IP를 가리켜야 함.
 # OCI 보안목록/방화벽에서 80·443 인바운드 허용 필요.
 
-board.example.com {
+board.s-edu.ai.kr {
     encode zstd gzip
     # /api 와 SPA 모두 백엔드(uvicorn)가 처리(단일 출처).
     reverse_proxy 127.0.0.1:8000
