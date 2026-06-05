@@ -28,9 +28,11 @@ export interface RawFactorBreakdown {
   near_52w: Num;
   pocket_pivot: Num;
   momentum_norm: Num;
+  rs_norm: Num;
   turnover_norm: Num;
   vol_fit: Num;
   momentum: Num;
+  rs: Num;
   volatility: Num;
   above_ma200: boolean;
 }
@@ -133,9 +135,11 @@ export interface FactorBreakdown {
   near52w: number | null;
   pocketPivot: number | null;
   momentumNorm: number | null;
+  rsNorm: number | null;
   turnoverNorm: number | null;
   volFit: number | null;
   momentum: number | null;
+  rs: number | null;
   volatility: number | null;
   aboveMa200: boolean;
 }

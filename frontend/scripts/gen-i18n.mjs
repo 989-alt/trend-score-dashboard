@@ -143,9 +143,11 @@ const ko = {
   "factor.near_52w": "52주 근접",
   "factor.pocket_pivot": "포켓피봇",
   "factor.momentum_norm": "모멘텀",
+  "factor.rs": "지수대비 RS",
   "factor.turnover_norm": "거래대금",
   "factor.vol_fit": "변동성 적합",
   "factor.raw.momentum": "모멘텀(원시)",
+  "factor.raw.rs": "RS(원시)",
   "factor.raw.volatility": "변동성(원시)",
 
   "drawer.section.recommendation": "추천 근거",

@@ -162,6 +162,7 @@ def test_score_market_ineligible_excluded_from_normalization(
             ticker=e.ticker,
             turnover=e.turnover if e.turnover is not None else Decimal("0"),
             momentum=e.factors.momentum if e.factors is not None else Decimal("0"),
+            rs=e.factors.rs if e.factors is not None else Decimal("0"),
             volatility=e.factors.volatility if e.factors is not None else Decimal("0"),
             near_52w=e.factors.near_52w if e.factors is not None else Decimal("0"),
             has_pocket_pivot=(e.factors.pocket_pivot > 0 if e.factors is not None else False),

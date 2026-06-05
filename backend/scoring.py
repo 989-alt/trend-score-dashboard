@@ -7,7 +7,8 @@ swing-bot ``src/universe/screener.py`` 의 추세추종 변형(``KRTrendScreener
 - 하드필터: 거래대금 ≥ 임계 · 모멘텀 ≥ 임계 · 200일선 위 · 변동성 밴드 안.
   + Gap B: 52주 신고가 근접(``near_52w >= breakout_52w_min``)이면 변동성 상한 면제.
 - 점수: cross-sectional min-max 정규화 후 가중합(0~1). ineligible 은 0.
-  ``score = w52*near_52w + w_pp*pp + w_mom*mom_norm + w_to*to_norm + w_vf*vol_fit``.
+  ``score = w52*near_52w + w_pp*pp + w_mom*mom_norm + w_rs*rs_norm + w_to*to_norm + w_vf*vol_fit``.
+  RS(지수대비 상대강도) = 종목모멘텀 − 지수모멘텀 (cross-sectional min-max 정규화).
 
 원칙: 금액·수량·비율은 ``Decimal`` (float 금지). ``math`` 보조 변환은 문자열 경유로
 정밀도 손실 최소화.
@@ -153,6 +154,7 @@ class Candidate:
     ticker: str
     turnover: Decimal
     momentum: Decimal
+    rs: Decimal  # 지수대비 상대수익률 (종목모멘텀 − 지수모멘텀)
     volatility: Decimal
     near_52w: Decimal
     has_pocket_pivot: bool
@@ -209,12 +211,15 @@ def score_candidates(
 
     turnovers = [c.turnover for c in candidates]
     momentums = [c.momentum for c in candidates]
+    rss = [c.rs for c in candidates]
     t_lo, t_hi = min(turnovers), max(turnovers)
     m_lo, m_hi = min(momentums), max(momentums)
+    rs_lo, rs_hi = min(rss), max(rss)
 
     for cand in candidates:
         turnover_norm = min_max_norm(cand.turnover, t_lo, t_hi)
         momentum_norm = min_max_norm(cand.momentum, m_lo, m_hi)
+        rs_norm = min_max_norm(cand.rs, rs_lo, rs_hi)
         vol_fit = volatility_fit(cand.volatility, settings.vol_band_low, settings.vol_band_high)
         pp_score = Decimal("1") if cand.has_pocket_pivot else Decimal("0")
         if cand.eligible:
@@ -222,6 +227,7 @@ def score_candidates(
                 cand.near_52w * settings.weight_52w
                 + pp_score * settings.weight_pocket_pivot
                 + momentum_norm * settings.weight_momentum
+                + rs_norm * settings.weight_rs
                 + turnover_norm * settings.weight_turnover
                 + vol_fit * settings.weight_vol_fit
             )
@@ -233,9 +239,11 @@ def score_candidates(
             near_52w=cand.near_52w,
             pocket_pivot=pp_score,
             momentum_norm=momentum_norm,
+            rs_norm=rs_norm,
             turnover_norm=turnover_norm,
             vol_fit=vol_fit,
             momentum=cand.momentum,
+            rs=cand.rs,
             volatility=cand.volatility,
             above_ma200=cand.above_ma200,
         )

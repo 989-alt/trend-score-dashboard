@@ -307,6 +307,43 @@ def test_live_kr_name_cache_and_fallback() -> None:
     assert lp.get_name("000000", "KR") == "000000"
 
 
+def test_live_index_ohlcv_yf_and_daily_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """지수 일봉(RS 분모): KR=^KS11 을 yfinance 로 받고 DailyCache 에 일1회 — 2번째는 캐시."""
+    lp = _live()
+    rows = [
+        OHLCVRow(
+            date=datetime(2026, 1, d, tzinfo=UTC).date(),
+            open=Decimal(c),
+            high=Decimal(c),
+            low=Decimal(c),
+            close=Decimal(c),
+            volume=Decimal("1000"),
+        )
+        for d, c in [(2, 100), (3, 101), (5, 102), (6, 103), (7, 104)]
+    ]
+    calls = {"n": 0}
+
+    def fake_yf_ohlcv(symbol: str, days: int) -> list[OHLCVRow]:
+        calls["n"] += 1
+        assert symbol == "^KS11"  # KR 지수 심볼 매핑
+        return rows
+
+    monkeypatch.setattr(lp, "_yf_ohlcv", fake_yf_ohlcv)
+    first = lp.get_index_ohlcv("KR", 3)
+    second = lp.get_index_ohlcv("KR", 3)
+    assert calls["n"] == 1  # 두 번째 호출은 캐시 적중(네트워크 0)
+    assert [str(r.close) for r in first] == ["102", "103", "104"]  # 최근 3봉 슬라이스
+    assert first == second
+
+
+def test_sample_index_ohlcv_deterministic() -> None:
+    """SampleProvider 지수 일봉 — 결정론·시장별 상이·days 슬라이스."""
+    sp = SampleProvider()
+    assert sp.get_index_ohlcv("KR", 30) == sp.get_index_ohlcv("KR", 30)  # 결정론
+    assert sp.get_index_ohlcv("US", 30) != sp.get_index_ohlcv("KR", 30)  # 시장별 시드
+    assert len(sp.get_index_ohlcv("KR", 5)) == 5
+
+
 def test_live_kis_investor_flow_skips_empty_latest_row(monkeypatch: pytest.MonkeyPatch) -> None:
     """FIX-A: output[0](최신일)은 빈 문자열 미정산 → skip 하고 첫 정산 행에서 buy/sell/net.
 

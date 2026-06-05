@@ -97,10 +97,12 @@ class FactorBreakdown(BaseModel):
     near_52w: Decimal  # 52주 신고가 근접도 0~1
     pocket_pivot: Decimal  # 포켓피봇 0/1
     momentum_norm: Decimal  # 모멘텀 정규화 0~1
+    rs_norm: Decimal = Decimal("0")  # 지수대비 상대강도(RS) 정규화 0~1
     turnover_norm: Decimal  # 거래대금 정규화 0~1
     vol_fit: Decimal  # 변동성 밴드 적합도 0~1
     # 원시값(정규화 전) — 상세 표시·디버그
     momentum: Decimal
+    rs: Decimal = Decimal("0")  # 지수대비 상대수익률 (종목모멘텀 − 지수모멘텀)
     volatility: Decimal
     above_ma200: bool
 

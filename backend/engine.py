@@ -88,13 +88,32 @@ def _return_1y_pct(rows: list[OHLCVRow], current: Decimal) -> Decimal | None:
     return (current / past_close - Decimal("1")) * Decimal("100")
 
 
+def _index_momentum(provider: MarketDataProvider, market: Market, settings: Settings) -> Decimal:
+    """시장 지수(KR=KOSPI, US=S&P500)의 lookback 모멘텀 — 스캔당 1회. RS 분모.
+
+    지수 결측(yfinance 429·빈 결과 등)은 중립 0 으로 폴백한다 → RS 가 절대 모멘텀으로
+    수렴할 뿐 전체 스캔을 막지 않는다(per-ticker 흡수 밖이라 여기서 명시적 가드).
+    """
+    try:
+        idx_rows = provider.get_index_ohlcv(market, settings.lookback_days + 8)
+    except _TICKER_ERRORS:
+        return Decimal("0")
+    if len(idx_rows) < 2:
+        return Decimal("0")
+    return sc.compute_momentum(idx_rows[-settings.lookback_days :])
+
+
 def _collect_raw(
     ticker: str,
     market: Market,
     provider: MarketDataProvider,
     settings: Settings,
+    index_momentum: Decimal,
 ) -> _Raw:
     """ticker 의 원천 데이터를 조회하고 raw 팩터를 산출해 ``_Raw`` 로 묶는다.
+
+    ``index_momentum`` 은 스캔당 1회 산정한 시장 지수의 lookback 모멘텀으로,
+    RS(지수대비 상대수익률 = 종목모멘텀 − 지수모멘텀) 계산에 쓴다.
 
     조회 실패는 호출 측(``score_market``)이 try/except 로 흡수하므로 여기서는
     예외를 그대로 전파한다.
@@ -115,6 +134,8 @@ def _collect_raw(
 
     recent = rows[-settings.lookback_days :]
     momentum = sc.compute_momentum(recent)
+    # RS(지수대비 상대강도) = 종목 모멘텀 − 같은 구간 지수 모멘텀.
+    rs = momentum - index_momentum
     volatility = sc.compute_annualized_volatility(recent)
     near_52w = sc.proximity_to_52w_high(rows, high_52w=fundamentals.w52_high)
     has_pp = sc.pocket_pivot(rows, lookback=settings.pocket_pivot_lookback)
@@ -137,6 +158,7 @@ def _collect_raw(
         ticker=ticker,
         turnover=turnover,
         momentum=momentum,
+        rs=rs,
         volatility=volatility,
         near_52w=near_52w,
         has_pocket_pivot=has_pp,
@@ -172,9 +194,11 @@ def _ineligible_breakdown(raw: _Raw, settings: Settings) -> FactorBreakdown:
         near_52w=cand.near_52w,
         pocket_pivot=Decimal("1") if cand.has_pocket_pivot else Decimal("0"),
         momentum_norm=Decimal("0"),
+        rs_norm=Decimal("0"),
         turnover_norm=Decimal("0"),
         vol_fit=sc.volatility_fit(cand.volatility, settings.vol_band_low, settings.vol_band_high),
         momentum=cand.momentum,
+        rs=cand.rs,
         volatility=cand.volatility,
         above_ma200=raw.above_ma200,
     )
@@ -308,8 +332,13 @@ def score_market(
     # 순차(스레드 안전). per-ticker 예외는 _TICKER_ERRORS 로 흡수해 failed 카운트.
     raws: list[_Raw] = []
     failed = 0
+    # 지수 모멘텀은 스캔당 1회만 산정(종목별 반복 조회 금지) → 모든 종목에 공유 주입.
+    index_momentum = _index_momentum(provider, market, settings)
     with ThreadPoolExecutor(max_workers=settings.max_workers) as pool:
-        futures = [pool.submit(_collect_raw, t, market, provider, settings) for t in universe]
+        futures = [
+            pool.submit(_collect_raw, t, market, provider, settings, index_momentum)
+            for t in universe
+        ]
         for future in futures:
             try:
                 raws.append(future.result())

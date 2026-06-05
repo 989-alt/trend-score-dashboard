@@ -399,6 +399,9 @@ class TestScoreCandidates:
             ticker="A",
             turnover=Decimal("20000000000"),
             momentum=Decimal("0.3"),
+            # rs=momentum 으로 두면 rs_norm==momentum_norm → mom·rs 가중 합산(0.13+0.12)이
+            # 기존 momentum 0.25 와 동일해 골든 점수가 불변(이중계상 검증 의도).
+            rs=Decimal("0.3"),
             volatility=Decimal("0.40"),  # vol_fit 중심 → 1
             near_52w=Decimal("1"),
             has_pocket_pivot=True,
@@ -424,6 +427,7 @@ class TestScoreCandidates:
             ticker="LO",
             turnover=Decimal("10000000000"),
             momentum=Decimal("0.0"),
+            rs=Decimal("0.0"),
             volatility=Decimal("0.40"),
             near_52w=Decimal("0"),
             has_pocket_pivot=False,
@@ -434,6 +438,7 @@ class TestScoreCandidates:
             ticker="HI",
             turnover=Decimal("30000000000"),
             momentum=Decimal("0.5"),
+            rs=Decimal("0.5"),
             volatility=Decimal("0.40"),
             near_52w=Decimal("0"),
             has_pocket_pivot=False,
@@ -457,6 +462,7 @@ class TestScoreCandidates:
             ticker="X",
             turnover=Decimal("20000000000"),
             momentum=Decimal("0.3"),
+            rs=Decimal("0.3"),
             volatility=Decimal("0.40"),
             near_52w=Decimal("1"),
             has_pocket_pivot=True,
@@ -475,12 +481,14 @@ class TestScoreCandidates:
         assert breakdown.above_ma200 is False
 
     def test_equivalence_with_reference_score_formula(self) -> None:
-        # 원본 _score_trend_candidates 의 가중합과 동치(가중치 0.30/0.20/0.25/0.15/0.10).
-        # 후보 3개 — 정규화·vol_fit 까지 포함한 골든 점수.
+        # 가중합 동치(0.30/0.20/[mom 0.13 + rs 0.12 = 0.25]/0.15/0.10). 각 후보 rs=momentum
+        # 이라 rs_norm==momentum_norm → 합산 0.25 로 원본 공식과 동일한 골든 점수.
+        # 후보 3개 — 정규화·vol_fit 까지 포함.
         c1 = Candidate(
             ticker="C1",
             turnover=Decimal("10000000000"),
             momentum=Decimal("0.0"),
+            rs=Decimal("0.0"),
             volatility=Decimal("0.30"),  # vol_fit = 0.5
             near_52w=Decimal("0.5"),
             has_pocket_pivot=False,
@@ -491,6 +499,7 @@ class TestScoreCandidates:
             ticker="C2",
             turnover=Decimal("20000000000"),
             momentum=Decimal("0.2"),
+            rs=Decimal("0.2"),
             volatility=Decimal("0.40"),  # vol_fit = 1
             near_52w=Decimal("1.0"),
             has_pocket_pivot=True,
@@ -501,6 +510,7 @@ class TestScoreCandidates:
             ticker="C3",
             turnover=Decimal("30000000000"),
             momentum=Decimal("0.4"),
+            rs=Decimal("0.4"),
             volatility=Decimal("0.50"),  # vol_fit = 0.5
             near_52w=Decimal("0.8"),
             has_pocket_pivot=False,
@@ -521,12 +531,34 @@ class TestScoreCandidates:
         #     + volfit 0.5*0.10=0.05 → 0.69
         assert result["C3"][0] == Decimal("0.69")
 
+    def test_rs_factor_contributes_independently(self) -> None:
+        # 같은 momentum/turnover, 다른 rs → rs_norm 차이만큼만 점수차(weight_rs=0.12).
+        common = {
+            "turnover": Decimal("20000000000"),
+            "momentum": Decimal("0.2"),
+            "volatility": Decimal("0.40"),  # vol_fit 중심 → 1
+            "near_52w": Decimal("0"),
+            "has_pocket_pivot": False,
+            "above_ma200": True,
+            "eligible": True,
+        }
+        lo = Candidate(ticker="RSLO", rs=Decimal("-0.1"), **common)
+        hi = Candidate(ticker="RSHI", rs=Decimal("0.3"), **common)
+        result = score_candidates([lo, hi], _settings())
+        # turnover·momentum 동일(min==max → norm=1) → rs 만 다름: rs_norm lo=0, hi=1.
+        assert result["RSLO"][1].rs_norm == Decimal("0")
+        assert result["RSHI"][1].rs_norm == Decimal("1")
+        assert result["RSLO"][1].rs == Decimal("-0.1")  # 원시값 보존
+        # 점수차 = (1-0) × weight_rs(0.12).
+        assert result["RSHI"][0] - result["RSLO"][0] == Decimal("0.12")
+
     def test_score_clamped_to_unit_interval(self) -> None:
         # 모든 팩터 만점 → 1.0 을 초과하지 않음(clamp).
         cand = Candidate(
             ticker="MAX",
             turnover=Decimal("1"),
             momentum=Decimal("1"),
+            rs=Decimal("1"),
             volatility=Decimal("0.40"),
             near_52w=Decimal("1"),
             has_pocket_pivot=True,

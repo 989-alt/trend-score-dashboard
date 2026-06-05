@@ -66,9 +66,11 @@ function parseFactors(r: RawFactorBreakdown | null | undefined): FactorBreakdown
     near52w: toNum(r.near_52w),
     pocketPivot: toNum(r.pocket_pivot),
     momentumNorm: toNum(r.momentum_norm),
+    rsNorm: toNum(r.rs_norm),
     turnoverNorm: toNum(r.turnover_norm),
     volFit: toNum(r.vol_fit),
     momentum: toNum(r.momentum),
+    rs: toNum(r.rs),
     volatility: toNum(r.volatility),
     aboveMa200: Boolean(r.above_ma200),
   };

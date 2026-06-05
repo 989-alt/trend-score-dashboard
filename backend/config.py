@@ -62,9 +62,12 @@ class Settings(BaseSettings):
     pocket_pivot_lookback: int = 10
     breakout_52w_min: Decimal = Decimal("0.90")
 
-    # 점수 가중치 (합 1.0)
+    # 점수 가중치 (합 1.0). 기존 momentum 0.25 를 momentum 0.13 + rs 0.12 로 분할 —
+    # RS(지수대비 상대수익률)는 절대 momentum 과 collinear 이므로 합쳐서 0.25 를 유지해
+    # 이중계상을 방지한다(나머지 4개 가중치는 불변).
     weight_52w: Decimal = Decimal("0.30")
-    weight_momentum: Decimal = Decimal("0.25")
+    weight_momentum: Decimal = Decimal("0.13")
+    weight_rs: Decimal = Decimal("0.12")
     weight_pocket_pivot: Decimal = Decimal("0.20")
     weight_turnover: Decimal = Decimal("0.15")
     weight_vol_fit: Decimal = Decimal("0.10")

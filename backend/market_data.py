@@ -108,6 +108,10 @@ class MarketDataProvider(Protocol):
         """``ticker`` 의 최근 ``days`` 일 일봉 OHLCV (날짜 오름차순)."""
         ...
 
+    def get_index_ohlcv(self, market: Market, days: int) -> list[OHLCVRow]:
+        """``market`` 지수(KR=KOSPI, US=S&P500)의 최근 ``days`` 일 일봉. RS 분모용."""
+        ...
+
     def get_quote(self, ticker: str, market: Market) -> Quote:
         """``ticker`` 의 현재 시세 스냅샷."""
         ...
@@ -378,6 +382,14 @@ class SampleProvider:
             return rows[-days:]
         return rows
 
+    def get_index_ohlcv(self, market: Market, days: int) -> list[OHLCVRow]:
+        """합성 지수 일봉 — 시장별 고정 시드로 결정론 생성(RS 분모)."""
+        closes, volumes = self._synth_series(f"INDEX-{market}")
+        rows = self._build_rows(closes, volumes)
+        if days < len(rows):
+            return rows[-days:]
+        return rows
+
     def get_quote(self, ticker: str, market: Market) -> Quote:
         """합성 시세 — 마지막 일봉 기준 현재가·시가·거래대금.
 
@@ -628,6 +640,11 @@ _PRICE_TTL = timedelta(seconds=30)
 #: 일봉 캐시 종류 키(DailyCache.kind).
 _CACHE_OHLCV = "ohlcv"
 _CACHE_FUND = "fundamentals"
+_CACHE_INDEX = "index"
+
+#: RS(지수대비 상대강도) 분모 지수 심볼(yfinance). KR=KOSPI, US=S&P500.
+#: pykrx 지수는 데이터센터 IP 에서 KRX 403 → 양 시장 모두 yfinance 로 일원화.
+_INDEX_SYMBOL: dict[Market, str] = {"KR": "^KS11", "US": "^GSPC"}
 
 #: yfinance(Yahoo) 429 백오프 — 1·2·4·8·16초, 최대 5회. (FIX-C)
 _yf_retry = retry(
@@ -1182,6 +1199,28 @@ class LiveProvider:
         """
         cached = self._cached_ohlcv(ticker, market)
         rows = cached if cached is not None else self._fetch_and_cache_ohlcv(ticker, market, days)
+        return rows[-days:] if days < len(rows) else rows
+
+    def get_index_ohlcv(self, market: Market, days: int) -> list[OHLCVRow]:
+        """시장 지수(KR=KOSPI ^KS11, US=S&P500 ^GSPC) 일봉 — RS 분모. yfinance + 일1회 캐시.
+
+        KIS 일봉 API 는 종목용이라 지수는 yfinance 로 받는다(curl_cffi 임퍼소네이션이
+        Yahoo 429 회피). 종목 일봉과 동일하게 ``DailyCache`` 에 일1회 캐시(30분 스캔마다
+        재조회 방지). 실패는 호출 측(엔진 ``_index_momentum``)이 흡수 → RS 중립.
+        """
+        symbol = _INDEX_SYMBOL[market]
+        cached = self._daily.get(market, symbol, _market_today(market), _CACHE_INDEX)
+        if cached is not None:
+            rows = _OHLCVList.model_validate_json(cached).rows
+        else:
+            rows = self._yf_ohlcv(symbol, days)
+            self._daily.put(
+                market,
+                symbol,
+                _market_today(market),
+                _CACHE_INDEX,
+                _OHLCVList(rows=rows).model_dump_json(),
+            )
         return rows[-days:] if days < len(rows) else rows
 
     def _cached_ohlcv(self, ticker: str, market: Market) -> list[OHLCVRow] | None:

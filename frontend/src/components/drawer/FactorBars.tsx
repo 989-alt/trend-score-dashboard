@@ -23,6 +23,7 @@ export function FactorBars({ factors }: Props) {
     { labelKey: "factor.near_52w", value: factors.near52w },
     { labelKey: "factor.pocket_pivot", value: factors.pocketPivot },
     { labelKey: "factor.momentum_norm", value: factors.momentumNorm },
+    { labelKey: "factor.rs", value: factors.rsNorm },
     { labelKey: "factor.turnover_norm", value: factors.turnoverNorm },
     { labelKey: "factor.vol_fit", value: factors.volFit },
   ];
@@ -48,6 +49,10 @@ export function FactorBars({ factors }: Props) {
         <span>
           {t("factor.raw.momentum")}:{" "}
           <b>{factors.momentum === null ? EM_DASH : factors.momentum.toFixed(3)}</b>
+        </span>
+        <span>
+          {t("factor.raw.rs")}:{" "}
+          <b>{factors.rs === null ? EM_DASH : factors.rs.toFixed(3)}</b>
         </span>
         <span>
           {t("factor.raw.volatility")}:{" "}
