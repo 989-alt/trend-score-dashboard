@@ -1204,39 +1204,56 @@ class LiveProvider:
         )
 
     def _kis_ohlcv(self, ticker: str, days: int) -> list[OHLCVRow]:
-        end = datetime.now(tz=UTC).strftime("%Y%m%d")
-        start = (datetime.now(tz=UTC) - timedelta(days=int(days * 1.6) + 10)).strftime("%Y%m%d")
-        data = self._kis_get(
-            "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice",
-            tr_id="FHKST03010100",
-            params={
-                "FID_COND_MRKT_DIV_CODE": "J",
-                "FID_INPUT_ISCD": ticker,
-                "FID_INPUT_DATE_1": start,
-                "FID_INPUT_DATE_2": end,
-                "FID_PERIOD_DIV_CODE": "D",
-                "FID_ORG_ADJ_PRC": "0",
-            },
-        )
-        chart = data.get("output2") or []
-        rows: list[OHLCVRow] = []
-        for rec in chart:
-            if not rec.get("stck_bsop_date"):
-                continue
-            d = rec["stck_bsop_date"]
-            rows.append(
-                OHLCVRow(
-                    date=datetime.strptime(d, "%Y%m%d").replace(tzinfo=UTC).date(),
-                    open=_d(rec["stck_oprc"]),
-                    high=_d(rec["stck_hgpr"]),
-                    low=_d(rec["stck_lwpr"]),
-                    close=_d(rec["stck_clpr"]),
-                    volume=_d(rec["acml_vol"]),
-                )
+        # KIS inquire-daily-itemchartprice(FHKST03010100) 는 날짜 범위를 줘도 호출당
+        # 최대 ~100봉만 반환한다. days(MA200=200·1년수익률=252 충족 위해 보통 280)를
+        # 채우려면 윈도우를 과거로 옮기며 페이지네이션해 누적한다. (일1회 prep 경로라
+        # 종목당 ~3회 호출.) 단일 호출만 하면 ~100봉만 들어와 MA200/1년수익률이 None.
+        window_cal_days = 150  # 한 윈도우 ≈ 100 거래일 (KIS 100봉 cap 이하)
+        max_pages = 8  # 안전 상한(≈800 거래일) — 무한루프 방지
+        end_dt = datetime.now(tz=UTC).date()
+        seen: dict[date, OHLCVRow] = {}
+        for _ in range(max_pages):
+            start_dt = end_dt - timedelta(days=window_cal_days)
+            data = self._kis_get(
+                "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice",
+                tr_id="FHKST03010100",
+                params={
+                    "FID_COND_MRKT_DIV_CODE": "J",
+                    "FID_INPUT_ISCD": ticker,
+                    "FID_INPUT_DATE_1": start_dt.strftime("%Y%m%d"),
+                    "FID_INPUT_DATE_2": end_dt.strftime("%Y%m%d"),
+                    "FID_PERIOD_DIV_CODE": "D",
+                    "FID_ORG_ADJ_PRC": "0",
+                },
             )
-        if not rows:
+            page: list[OHLCVRow] = []
+            for rec in data.get("output2") or []:
+                if not rec.get("stck_bsop_date"):
+                    continue
+                page.append(
+                    OHLCVRow(
+                        date=datetime.strptime(rec["stck_bsop_date"], "%Y%m%d")
+                        .replace(tzinfo=UTC)
+                        .date(),
+                        open=_d(rec["stck_oprc"]),
+                        high=_d(rec["stck_hgpr"]),
+                        low=_d(rec["stck_lwpr"]),
+                        close=_d(rec["stck_clpr"]),
+                        volume=_d(rec["acml_vol"]),
+                    )
+                )
+            if not page:
+                break
+            before = len(seen)
+            for row in page:
+                seen[row.date] = row  # 날짜 dedup
+            # 충분히 모았거나, 새 봉이 더 없으면(더 과거 데이터 없음/중복 페이지) 종료.
+            if len(seen) >= days or len(seen) == before:
+                break
+            end_dt = min(r.date for r in page) - timedelta(days=1)  # 윈도우 과거로
+        if not seen:
             raise LiveProviderError(f"KIS 일봉 빈 결과: {ticker}")
-        rows.sort(key=lambda r: r.date)  # KIS 는 최신순 → 오름차순 정렬
+        rows = sorted(seen.values(), key=lambda r: r.date)  # 오름차순
         return rows[-days:] if days < len(rows) else rows
 
     # ── 시세 ──────────────────────────────────────────────────────────

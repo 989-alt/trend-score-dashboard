@@ -281,6 +281,23 @@ def test_live_kis_ohlcv_parsing_sorted(monkeypatch: pytest.MonkeyPatch) -> None:
     assert all(rows[i].date < rows[i + 1].date for i in range(len(rows) - 1))
 
 
+def test_live_kis_ohlcv_paginates_past_100(monkeypatch: pytest.MonkeyPatch) -> None:
+    """KIS 일봉은 호출당 ~100봉 cap → 윈도우 페이지네이션으로 252봉+ 누적(MA200/1년수익률용)."""
+    lp = _live()
+
+    # 가짜 KIS: 호출당 정확히 100봉(FID_INPUT_DATE_2 이전 100일, 최신순)만 반환 — 실제 cap 모사.
+    def fake_get(path: str, *, tr_id: str, params: dict[str, str]) -> dict[str, Any]:
+        end = datetime.strptime(params["FID_INPUT_DATE_2"], "%Y%m%d").date()
+        bars = [_kis_bar((end - timedelta(days=i)).strftime("%Y%m%d"), "100") for i in range(100)]
+        return {"rt_cd": "0", "output2": bars}
+
+    monkeypatch.setattr(lp, "_kis_get", fake_get)
+    rows = lp.get_daily_ohlcv("005930", "KR", 280)
+    # 단일 호출이면 100봉뿐 → MA200(200)·1년수익률(252) 불가. 페이지네이션으로 252봉+ 확보.
+    assert len(rows) >= 252
+    assert all(rows[i].date < rows[i + 1].date for i in range(len(rows) - 1))
+
+
 def test_live_kis_investor_flow_skips_empty_latest_row(monkeypatch: pytest.MonkeyPatch) -> None:
     """FIX-A: output[0](최신일)은 빈 문자열 미정산 → skip 하고 첫 정산 행에서 buy/sell/net.
 
