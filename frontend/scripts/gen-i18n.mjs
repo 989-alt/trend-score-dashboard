@@ -149,6 +149,8 @@ const ko = {
   "factor.raw.momentum": "모멘텀(원시)",
   "factor.raw.rs": "RS(원시)",
   "factor.raw.volatility": "변동성(원시)",
+  "factor.inelig.note":
+    "부적격 종목 — 모멘텀·RS·거래대금은 통과 종목 밴드 대비 위치입니다(음수=미달, 1 초과=밴드 위). 변동성 적합 0·200일선 아래 등도 탈락 요인입니다.",
 
   "drawer.section.recommendation": "추천 근거",
   "rec.scoreOf": "점수 {score} / 100",

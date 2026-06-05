@@ -27,7 +27,9 @@ from backend.scoring import (
     above_ma200,
     compute_annualized_volatility,
     compute_momentum,
+    factor_bounds,
     grade_for_score,
+    linear_position,
     min_max_norm,
     passes_hard_filter,
     pocket_pivot,
@@ -387,6 +389,35 @@ class TestPassesHardFilter:
 # ---------------------------------------------------------------------------
 # 10. score_candidates — cross-sectional min-max + 가중합 + ineligible
 # ---------------------------------------------------------------------------
+
+
+def test_linear_position_unclamped() -> None:
+    # min_max_norm 과 달리 클램프 없음 — 밴드 미달=음수, 초과=1↑, hi==lo=0.
+    assert linear_position(Decimal("0.5"), Decimal("0"), Decimal("1")) == Decimal("0.5")
+    assert linear_position(Decimal("-0.2"), Decimal("0"), Decimal("1")) == Decimal("-0.2")
+    assert linear_position(Decimal("1.5"), Decimal("0"), Decimal("1")) == Decimal("1.5")
+    assert linear_position(Decimal("9"), Decimal("2"), Decimal("2")) == Decimal("0")  # hi==lo
+
+
+def test_factor_bounds_min_max_and_empty() -> None:
+    def cand(t: str, m: str, rs: str, to: str) -> Candidate:
+        return Candidate(
+            ticker=t,
+            turnover=Decimal(to),
+            momentum=Decimal(m),
+            rs=Decimal(rs),
+            volatility=Decimal("0.4"),
+            near_52w=Decimal("0"),
+            has_pocket_pivot=False,
+            above_ma200=True,
+            eligible=True,
+        )
+
+    b = factor_bounds([cand("A", "0.1", "0.05", "1e10"), cand("B", "0.3", "-0.02", "3e10")])
+    assert b is not None
+    assert (b.momentum_lo, b.momentum_hi) == (Decimal("0.1"), Decimal("0.3"))
+    assert (b.rs_lo, b.rs_hi) == (Decimal("-0.02"), Decimal("0.05"))
+    assert factor_bounds([]) is None
 
 
 class TestScoreCandidates:

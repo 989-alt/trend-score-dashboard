@@ -226,7 +226,7 @@ export function DetailDrawer({ entry, onClose }: Props) {
           </Section>
 
           <Section title={t("drawer.section.factors")}>
-            <FactorBars factors={entry.factors} />
+            <FactorBars factors={entry.factors} eligible={entry.eligible} />
           </Section>
 
           <Section title={t("drawer.section.stops")}>

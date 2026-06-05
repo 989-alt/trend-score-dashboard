@@ -142,6 +142,18 @@ def min_max_norm(value: Decimal, lo: Decimal, hi: Decimal) -> Decimal:
     return (value - lo) / (hi - lo)
 
 
+def linear_position(value: Decimal, lo: Decimal, hi: Decimal) -> Decimal:
+    """[lo,hi] 기준 선형 위치 — ``min_max_norm`` 과 달리 **클램프 없음**.
+
+    ``lo`` 미만이면 음수, ``hi`` 초과면 1 초과를 그대로 반환한다. ``hi == lo`` 면
+    기준 폭이 없어 ``Decimal("0")``. 부적격 종목이 '통과(적격) 종목 밴드' 대비 어디에
+    있는지(미달=음수, 초과=1↑) 진단 표시하는 용도(점수에는 쓰지 않음).
+    """
+    if hi == lo:
+        return Decimal("0")
+    return (value - lo) / (hi - lo)
+
+
 # ---------------------------------------------------------------------------
 # 후보 + 점수
 # ---------------------------------------------------------------------------
@@ -160,6 +172,32 @@ class Candidate:
     has_pocket_pivot: bool
     above_ma200: bool
     eligible: bool
+
+
+@dataclass(frozen=True)
+class FactorBounds:
+    """적격(통과) 후보군의 momentum/rs/turnover min·max.
+
+    부적격 종목을 '통과 종목 밴드' 대비 위치(``linear_position``)로 진단 표시할 때의
+    기준. 적격이 없으면 ``factor_bounds`` 가 ``None`` 을 반환한다.
+    """
+
+    momentum_lo: Decimal
+    momentum_hi: Decimal
+    rs_lo: Decimal
+    rs_hi: Decimal
+    turnover_lo: Decimal
+    turnover_hi: Decimal
+
+
+def factor_bounds(candidates: list[Candidate]) -> FactorBounds | None:
+    """적격 후보군의 momentum/rs/turnover 경계(min·max). 후보 없으면 ``None``."""
+    if not candidates:
+        return None
+    ms = [c.momentum for c in candidates]
+    rss = [c.rs for c in candidates]
+    ts = [c.turnover for c in candidates]
+    return FactorBounds(min(ms), max(ms), min(rss), max(rss), min(ts), max(ts))
 
 
 def passes_hard_filter(
@@ -272,10 +310,13 @@ def grade_for_score(score_100: Decimal, settings: Settings) -> Grade:
 
 __all__ = [
     "Candidate",
+    "FactorBounds",
     "above_ma200",
     "compute_annualized_volatility",
     "compute_momentum",
+    "factor_bounds",
     "grade_for_score",
+    "linear_position",
     "min_max_norm",
     "passes_hard_filter",
     "pocket_pivot",

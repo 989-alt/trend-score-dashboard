@@ -181,21 +181,30 @@ def _collect_raw(
     )
 
 
-def _ineligible_breakdown(raw: _Raw, settings: Settings) -> FactorBreakdown:
-    """부적격(ineligible) 종목의 팩터 분해 — 정규화 없이 원시 팩터로 직접 조립.
+def _ineligible_breakdown(
+    raw: _Raw, settings: Settings, bounds: sc.FactorBounds | None
+) -> FactorBreakdown:
+    """부적격(ineligible) 종목의 팩터 분해 — '어디서 미달했는지' 진단 표시.
 
-    부적격은 ``score_candidates`` 정규화 모집단에서 제외하므로 cross-sectional
-    momentum_norm/turnover_norm 이 정의되지 않는다. 따라서 둘은 0 으로 두고,
-    near_52w·pocket_pivot(0/1)·momentum/volatility 원시값·vol_fit·실제 200일선
-    위 여부만 보존한다(표시·디버그용).
+    momentum/rs/turnover 는 점수 정규화 모집단(적격)에서 빠지지만, 진단을 위해 **통과
+    종목 밴드 기준 선형 위치**(``linear_position`` — 클램프 없음: 밴드 미달이면 음수,
+    초과면 1↑)로 매긴다. 통과 종목이 없으면(``bounds`` 가 None) 0. near_52w·
+    pocket_pivot(0/1)·vol_fit 은 원시 기반(실제 신호 — 변동성 밴드 밖이면 vol_fit=0 등)
+    이라 그대로 둔다. (부적격 점수 자체는 호출 측에서 0 — 본 분해는 표시·진단용.)
     """
     cand = raw.candidate
+    if bounds is not None:
+        momentum_norm = sc.linear_position(cand.momentum, bounds.momentum_lo, bounds.momentum_hi)
+        rs_norm = sc.linear_position(cand.rs, bounds.rs_lo, bounds.rs_hi)
+        turnover_norm = sc.linear_position(cand.turnover, bounds.turnover_lo, bounds.turnover_hi)
+    else:
+        momentum_norm = rs_norm = turnover_norm = Decimal("0")
     return FactorBreakdown(
         near_52w=cand.near_52w,
         pocket_pivot=Decimal("1") if cand.has_pocket_pivot else Decimal("0"),
-        momentum_norm=Decimal("0"),
-        rs_norm=Decimal("0"),
-        turnover_norm=Decimal("0"),
+        momentum_norm=momentum_norm,
+        rs_norm=rs_norm,
+        turnover_norm=turnover_norm,
         vol_fit=sc.volatility_fit(cand.volatility, settings.vol_band_low, settings.vol_band_high),
         momentum=cand.momentum,
         rs=cand.rs,
@@ -348,7 +357,10 @@ def score_market(
     # 정규화 모집단은 적격 종목만 — 부적격이 cross-sectional min/max 를 오염시키지 않게
     # (원본 screener.py:805-850 과 동치: 하드필터 통과분만 _score_trend_candidates 로).
     eligible_raws = [r for r in raws if r.candidate.eligible]
-    scored = sc.score_candidates([r.candidate for r in eligible_raws], settings)
+    eligible_cands = [r.candidate for r in eligible_raws]
+    scored = sc.score_candidates(eligible_cands, settings)
+    # 부적격 진단 표시용 — 통과 종목 밴드(momentum/rs/turnover min·max).
+    bounds = sc.factor_bounds(eligible_cands)
 
     entries: list[ScoreEntry] = []
     for raw in raws:
@@ -356,9 +368,9 @@ def score_market(
             score_norm, factors = scored[raw.ticker]
             score_100 = score_norm * Decimal("100")
         else:
-            # 부적격 — 점수 0, 팩터는 원시값으로 직접 조립(정규화 모집단 제외).
+            # 부적격 — 점수 0. 팩터는 통과 종목 밴드 대비 위치로 매겨 미달 항목을 드러낸다.
             score_100 = Decimal("0")
-            factors = _ineligible_breakdown(raw, settings)
+            factors = _ineligible_breakdown(raw, settings, bounds)
         grade = sc.grade_for_score(score_100, settings)
 
         # 무상태 트레일링 손절 — 매도요구 게이트는 200일선 위(추세 진입)이며 eligible 이

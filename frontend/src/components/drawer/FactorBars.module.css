@@ -40,6 +40,22 @@
   color: var(--text);
 }
 
+/* 부적격: 통과 종목 밴드 미달(음수)=빨강 / 초과(>1)=초록 — 시각 단서. */
+.below {
+  color: var(--down);
+}
+
+.above {
+  color: var(--up);
+}
+
+.note {
+  margin: 2px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
 .raw {
   display: flex;
   flex-wrap: wrap;
