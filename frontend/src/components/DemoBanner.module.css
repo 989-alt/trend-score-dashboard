@@ -12,3 +12,10 @@
   justify-content: center;
   line-height: 1.4;
 }
+
+/* Live (OCI-backed) variant — neutral, not a warning. */
+.live {
+  background: var(--surface-2);
+  border-bottom-color: var(--border);
+  color: var(--text-muted);
+}

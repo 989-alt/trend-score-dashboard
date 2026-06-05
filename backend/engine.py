@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
+import httpx
+
 from backend import market_hours
 from backend import scoring as sc
 from backend.config import Settings
@@ -46,8 +48,11 @@ _TRADING_DAYS_1Y = 252
 _MARKETS: tuple[Market, ...] = ("KR", "US")
 
 #: per-ticker 데이터 조회 실패로 흡수할 구체 예외(광범위 except 회피).
+#: ``httpx.HTTPError`` 포함 — KIS 일시적 5xx/타임아웃이 한 종목 때문에 전체 스캔을
+#: 무너뜨리지 않도록(라이브 300종목 스캔 회복력). 해당 종목만 failed 로 흡수.
 _TICKER_ERRORS: tuple[type[Exception], ...] = (
     LiveProviderError,
+    httpx.HTTPError,
     ValueError,
     KeyError,
     IndexError,

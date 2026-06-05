@@ -38,6 +38,7 @@ const ko = {
   "disclaimer.label": "면책 고지",
 
   "demo.banner": "샘플 데이터 데모입니다 — 실시간 시세가 아니며, 표시된 종목·점수·가격은 예시입니다.",
+  "live.banner": "장중 30분마다 자동 갱신되는 실데이터입니다 · 실시간(틱)은 아닙니다 · 투자 자문 아님.",
 
   "grade.strong_buy": "적극매수",
   "grade.buy": "매수",

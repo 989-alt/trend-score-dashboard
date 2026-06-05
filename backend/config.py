@@ -44,8 +44,10 @@ class Settings(BaseSettings):
     refresh_interval_min: int = 30
 
     # ── 라이브 스캔 성능 ───────────────────────────────────────────────
-    #: 유니버스 = 거래대금 상위 N(시장별). 전 종목 대신 유동성 상위만 스캔해 속도 확보.
+    #: 유니버스 = 거래대금 상위 N(KR). 전 종목 대신 유동성 상위만 스캔해 속도 확보.
     live_universe_top_n: int = Field(default=300, ge=1)
+    #: US 유니버스 상한 — yfinance(Yahoo)는 다종목 조회 시 429 로 막히므로 소수만.
+    live_universe_top_n_us: int = Field(default=30, ge=1)
     #: per-ticker 데이터 수집 동시성(ThreadPoolExecutor worker 수).
     max_workers: int = Field(default=8, ge=1)
 

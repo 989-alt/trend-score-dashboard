@@ -14,11 +14,28 @@ import type {
 } from "./types";
 
 /**
- * Static-demo build (GitHub Pages): no backend, so fetch bundled sample JSON
- * under the Vite base path instead of the live `/api/*` endpoints.
+ * Data source resolution for the deployed frontend:
+ * - VITE_API_BASE set (e.g. OCI backend URL) → fetch LIVE from that origin (CORS).
+ * - else VITE_STATIC=1 (GitHub Pages demo) → fetch bundled sample JSON under base path.
+ * - else → same-origin /api (OCI single-process serving, or local dev proxy).
  */
+export const API_BASE = (import.meta.env.VITE_API_BASE ?? "").replace(/\/+$/, "");
 export const STATIC_DEMO = import.meta.env.VITE_STATIC === "1";
+/** True when live data comes from a remote backend (OCI), not bundled sample. */
+export const LIVE_REMOTE = API_BASE !== "";
 const BASE = import.meta.env.BASE_URL;
+
+function snapshotUrl(market: string): string {
+  if (API_BASE) return `${API_BASE}/api/snapshot?market=${market}`;
+  if (STATIC_DEMO) return `${BASE}data/snapshot-${market}.json`;
+  return `/api/snapshot?market=${market}`;
+}
+
+function themesUrl(): string {
+  if (API_BASE) return `${API_BASE}/api/themes`;
+  if (STATIC_DEMO) return `${BASE}data/themes.json`;
+  return "/api/themes";
+}
 
 /** Parse a Decimal-as-string|number into a number, or null if absent/invalid. */
 export function toNum(v: unknown): number | null {
@@ -157,14 +174,11 @@ export async function fetchSnapshot(
   market: Market,
   signal?: AbortSignal,
 ): Promise<Snapshot> {
-  const m = market.toLowerCase();
-  const url = STATIC_DEMO ? `${BASE}data/snapshot-${m}.json` : `/api/snapshot?market=${m}`;
-  const raw = await getJson<RawSnapshot>(url, signal);
+  const raw = await getJson<RawSnapshot>(snapshotUrl(market.toLowerCase()), signal);
   return parseSnapshot(raw);
 }
 
 export async function fetchThemes(signal?: AbortSignal): Promise<ThemesData> {
-  const url = STATIC_DEMO ? `${BASE}data/themes.json` : "/api/themes";
-  const raw = await getJson<RawThemesResponse>(url, signal);
+  const raw = await getJson<RawThemesResponse>(themesUrl(), signal);
   return parseThemes(raw);
 }

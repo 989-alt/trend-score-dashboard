@@ -507,7 +507,7 @@ def test_live_universe_kr_fallback_to_themes(monkeypatch: pytest.MonkeyPatch) ->
 def test_live_universe_us_static_top_n() -> None:
     """US 유니버스 = 유동성 정적 화이트리스트 상위 N(거래대금 상위 근사)."""
     lp = _live()
-    settings = lp._settings.model_copy(update={"live_universe_top_n": 5})
+    settings = lp._settings.model_copy(update={"live_universe_top_n_us": 5})
     lp._settings = settings
     us = lp.list_universe("US")
     assert len(us) == 5
@@ -517,10 +517,10 @@ def test_live_universe_us_static_top_n() -> None:
 
 
 def test_live_universe_us_top_n_caps_default() -> None:
-    """기본 top_n(300)으로도 정적 리스트 길이 이내에서 안전하게 동작."""
-    lp = _live()  # 기본 live_universe_top_n=300
+    """기본 US 상한(live_universe_top_n_us=30, yfinance 429 회피)으로 상위 30 만."""
+    lp = _live()  # 기본 live_universe_top_n_us=30
     us = lp.list_universe("US")
-    assert 0 < len(us) <= 300
+    assert len(us) == 30
     assert "MSFT" in us
 
 

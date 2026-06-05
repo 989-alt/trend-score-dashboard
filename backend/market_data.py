@@ -1137,8 +1137,11 @@ class LiveProvider:
         US 거래대금 순위 무료 단일소스가 없어 S&P 500 + 주요 대형주 화이트리스트
         (``_US_LIQUID``)를 '거래대금 상위'의 안전한 근사로 쓴다. 정적이라 실패 없음;
         그래도 빈 경우(상수 변형) themes fallback 이 받친다.
+
+        상한은 ``live_universe_top_n_us``(기본 30) — yfinance(Yahoo)가 다종목 조회 시
+        429 로 막으므로 소수 대형주만 스캔한다.
         """
-        return list(_US_LIQUID[: self._settings.live_universe_top_n])
+        return list(_US_LIQUID[: self._settings.live_universe_top_n_us])
 
     def get_name(self, ticker: str, market: Market) -> str:
         """KIS/yfinance 종목명."""
