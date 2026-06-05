@@ -1697,11 +1697,21 @@ class LiveProvider:
     # ── yfinance 저수준 ───────────────────────────────────────────────
 
     def _session(self) -> Any:
-        """yfinance 공유 ``requests.Session`` (lazy). 연결 재사용으로 Yahoo 부하 절감."""
-        if self._yf_session is None:
-            import requests
+        """yfinance 공유 세션(lazy) — curl_cffi 브라우저 임퍼소네이션으로 Yahoo 429 회피.
 
-            self._yf_session = requests.Session()
+        Yahoo 는 데이터센터 IP 의 파이썬 ``requests`` UA 를 공격적으로 429 한다(OCI 등).
+        curl_cffi 의 Chrome TLS 핑거프린트 임퍼소네이션은 실제 브라우저처럼 보여 429 를
+        크게 줄인다(yfinance 공식 권장). 미설치 시 표준 ``requests`` 로 폴백.
+        """
+        if self._yf_session is None:
+            try:
+                from curl_cffi import requests as cffi_requests
+
+                self._yf_session = cffi_requests.Session(impersonate="chrome")
+            except Exception:  # curl_cffi 미설치/문제 → 표준 requests 폴백
+                import requests
+
+                self._yf_session = requests.Session()
         return self._yf_session
 
     def _yf_info(self, ticker: str) -> dict[str, Any]:
