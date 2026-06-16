@@ -17,13 +17,16 @@ def make_series(ticker: str, start: date, closes: list[int]) -> TickerSeries:
     rows = []
     for i, c in enumerate(closes):
         cd = Decimal(c)
+        # 홀짝 ±1.5% 교번으로 종가를 흔들어 연환산 변동성을 [0.20,0.60] 밴드(≈0.48) 안에 둔다
+        # → 합성 종목이 하드필터(변동성)를 통과해 적격 후보가 된다(빈 백테스트 방지).
+        close = cd * (Decimal("1.015") if i % 2 == 0 else Decimal("0.985"))
         rows.append(
             OHLCVRow(
                 date=start + timedelta(days=i),
                 open=cd,
-                high=cd * Decimal("1.01"),
-                low=cd * Decimal("0.99"),
-                close=cd,
+                high=cd * Decimal("1.025"),
+                low=cd * Decimal("0.975"),
+                close=close,
                 volume=Decimal("1000000"),
             )
         )
