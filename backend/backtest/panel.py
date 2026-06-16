@@ -20,10 +20,19 @@ class AsOfFundamentals:
 
 
 @dataclass(frozen=True)
+class Valuation:
+    """시점별(거래일 기준) 밸류에이션 — pykrx 일자별 PER/PBR."""
+
+    per: Decimal | None = None
+    pbr: Decimal | None = None
+
+
+@dataclass(frozen=True)
 class TickerSeries:
     ticker: str
     rows: list[OHLCVRow]
     turnover_by_date: dict[date, Decimal] = field(default_factory=dict)
+    valuation_by_date: dict[date, Valuation] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -64,6 +73,13 @@ class Panel:
         items = [f for f in self.fundamentals.get(ticker, []) if f.rcept_date <= t]
         return max(items, key=lambda f: f.rcept_date) if items else None
 
+    def valuation_asof(self, ticker: str, t: date) -> Valuation | None:
+        s = self.series.get(ticker)
+        if s is None or not s.valuation_by_date:
+            return None
+        dates = [d for d in s.valuation_by_date if d <= t]
+        return s.valuation_by_date[max(dates)] if dates else None
+
     def price_on_or_after(self, ticker: str, t: date) -> Decimal | None:
         """t 당일 또는 이후 첫 종가(진입 T+1 시가 대용 — 평가/체결용)."""
         s = self.series.get(ticker)
@@ -75,4 +91,4 @@ class Panel:
         return None
 
 
-__all__ = ["AsOfFundamentals", "Panel", "TickerSeries"]
+__all__ = ["AsOfFundamentals", "Panel", "TickerSeries", "Valuation"]

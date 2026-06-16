@@ -9,6 +9,7 @@ from backend.backtest.panel import (
     AsOfFundamentals,
     Panel,
     TickerSeries,
+    Valuation,
 )
 from backend.schemas import OHLCVRow
 
@@ -34,6 +35,7 @@ def make_series(ticker: str, start: date, closes: list[int]) -> TickerSeries:
         ticker=ticker,
         rows=rows,
         turnover_by_date={r.date: Decimal("20000000000") for r in rows},
+        valuation_by_date={r.date: Valuation(per=Decimal("10"), pbr=Decimal("1.2")) for r in rows},
     )
 
 

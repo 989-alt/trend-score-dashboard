@@ -25,6 +25,7 @@ def test_build_panel_from_mocked_sources(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(loader, "_ohlcv", lambda ticker, s, e: ohlcv)
     monkeypatch.setattr(loader, "_index_ohlcv", lambda s, e: ohlcv)
     monkeypatch.setattr(loader, "_fundamentals", lambda ticker: [])
+    monkeypatch.setattr(loader, "_valuation", lambda ticker, s, e: None)
 
     panel = loader.build(["000001"], date(2023, 1, 2), date(2023, 1, 3))
     rows = panel.rows_asof("000001", date(2023, 1, 3))

@@ -15,12 +15,20 @@ from pathlib import Path
 from typing import Any
 
 from backend.backtest.dart_client import DartClient
-from backend.backtest.panel import AsOfFundamentals, Panel, TickerSeries
+from backend.backtest.panel import AsOfFundamentals, Panel, TickerSeries, Valuation
 from backend.schemas import OHLCVRow
 
 
 def _d(v: Any) -> Decimal:
     return v if isinstance(v, Decimal) else Decimal(str(v))
+
+
+def _pos(v: Any) -> Decimal | None:
+    try:
+        d = _d(v)
+    except (ArithmeticError, ValueError, TypeError):
+        return None
+    return d if d.is_finite() and d > 0 else None
 
 
 class PanelLoader:
@@ -96,6 +104,22 @@ class PanelLoader:
                 turnover[d] = _d(rec["거래대금"])
         return rows, turnover
 
+    def _valuation(self, ticker: str, start: date, end: date) -> Any:
+        from pykrx import stock
+
+        return stock.get_market_fundamental_by_date(
+            start.strftime("%Y%m%d"), end.strftime("%Y%m%d"), ticker
+        )
+
+    @staticmethod
+    def _valuation_map(frame: Any) -> dict[date, Valuation]:
+        out: dict[date, Valuation] = {}
+        if frame is None or getattr(frame, "empty", True):
+            return out
+        for ts, rec in frame.iterrows():
+            out[ts.date()] = Valuation(per=_pos(rec.get("PER")), pbr=_pos(rec.get("PBR")))
+        return out
+
     def build(self, tickers: list[str], start: date, end: date) -> Panel:
         """tickers 의 시계열을 만들어 Panel 조립. 상장구간=OHLCV 존재구간 근사(위 한계 참조)."""
         series: dict[str, TickerSeries] = {}
@@ -106,7 +130,12 @@ class PanelLoader:
             if frame is None or frame.empty:
                 continue
             rows, turnover = self._rows(frame)
-            series[t] = TickerSeries(ticker=t, rows=rows, turnover_by_date=turnover)
+            series[t] = TickerSeries(
+                ticker=t,
+                rows=rows,
+                turnover_by_date=turnover,
+                valuation_by_date=self._valuation_map(self._valuation(t, start, end)),
+            )
             listings[t] = (rows[0].date, None)
             fundamentals[t] = self._fundamentals(t)
         idx_rows, _ = self._rows(self._index_ohlcv(start, end))

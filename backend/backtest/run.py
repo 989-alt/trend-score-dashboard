@@ -70,6 +70,8 @@ def _index_momentum(panel: Panel, t: date, settings: Settings) -> Decimal:
 
 
 _QUALITY_FACTORS = ("roe", "op_margin", "eps_growth")
+_VALUE_FACTORS = ("per", "pbr")
+_STUDY_FACTORS = _QUALITY_FACTORS + _VALUE_FACTORS
 
 
 def _quality_norm(panel: Panel, tickers: list[str], t: date) -> dict[str, Decimal]:
@@ -166,10 +168,10 @@ def run_backtest(panel: Panel, cfg: BacktestConfig) -> BacktestResult:
     es_mae: dict[int, list[Decimal]] = {h: [] for h in cfg.forward_horizons}
 
     fs_vals: dict[str, dict[int, list[Decimal]]] = {
-        f: {h: [] for h in cfg.forward_horizons} for f in _QUALITY_FACTORS
+        f: {h: [] for h in cfg.forward_horizons} for f in _STUDY_FACTORS
     }
     fs_fwd: dict[str, dict[int, list[Decimal]]] = {
-        f: {h: [] for h in cfg.forward_horizons} for f in _QUALITY_FACTORS
+        f: {h: [] for h in cfg.forward_horizons} for f in _STUDY_FACTORS
     }
 
     for i, t in enumerate(dates):
@@ -184,16 +186,22 @@ def run_backtest(panel: Panel, cfg: BacktestConfig) -> BacktestResult:
                     es_fwd[h].append(fr)
                     es_mae[h].append(mae)
             fund = panel.fundamentals_asof(tk, t)
-            if fund is not None:
-                fmap = {"roe": fund.roe, "op_margin": fund.op_margin, "eps_growth": fund.eps_growth}
-                for h in cfg.forward_horizons:
-                    fr = _fwd_return(panel, tk, t, h)
-                    if fr is None:
-                        continue
-                    for fname, fval in fmap.items():
-                        if fval is not None:
-                            fs_vals[fname][h].append(fval)
-                            fs_fwd[fname][h].append(fr)
+            val = panel.valuation_asof(tk, t)
+            factor_vals: dict[str, Decimal | None] = {
+                "roe": fund.roe if fund else None,
+                "op_margin": fund.op_margin if fund else None,
+                "eps_growth": fund.eps_growth if fund else None,
+                "per": val.per if val else None,
+                "pbr": val.pbr if val else None,
+            }
+            for h in cfg.forward_horizons:
+                fr = _fwd_return(panel, tk, t, h)
+                if fr is None:
+                    continue
+                for fname, fval in factor_vals.items():
+                    if fval is not None:
+                        fs_vals[fname][h].append(fval)
+                        fs_fwd[fname][h].append(fr)
         if i + 1 < len(dates) and picks:
             nxt = dates[i + 1]
             rets: list[Decimal] = []
@@ -239,7 +247,7 @@ def run_backtest(panel: Panel, cfg: BacktestConfig) -> BacktestResult:
             )
             for h in cfg.forward_horizons
         }
-        for fname in _QUALITY_FACTORS
+        for fname in _STUDY_FACTORS
     }
     return BacktestResult(
         portfolio_nav=nav,
