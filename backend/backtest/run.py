@@ -74,11 +74,15 @@ def _score_at(panel: Panel, t: date, settings: Settings) -> list[tuple[str, Deci
         rows = panel.rows_asof(ticker, t)
         if len(rows) < settings.ma200_window:
             continue
+        # I1: 라이브와 동일하게 '트레일링 52주(≈252거래일) 고가'를 분모로 사용
+        # (None → 전체이력 최고가 fallback 은 라이브-백테스트 score drift 유발).
+        trailing = rows[-252:]
+        w52_high = max((r.high for r in trailing), default=None)
         cands.append(
             build_candidate(
                 ticker=ticker,
                 rows=rows,
-                w52_high=None,
+                w52_high=w52_high,
                 index_momentum=idx_mom,
                 turnover=panel.turnover_asof(ticker, t),
                 min_turnover=settings.min_turnover_krw,
@@ -91,22 +95,25 @@ def _score_at(panel: Panel, t: date, settings: Settings) -> list[tuple[str, Deci
 
 
 def _fwd_return(panel: Panel, ticker: str, t: date, horizon: int) -> Decimal | None:
-    rows = panel.series[ticker].rows
-    future = [r for r in rows if r.date > t]
-    if not future:
+    """entry=T+1 첫 봉, horizon 봉 뒤 종가 수익률. horizon 봉 미확보 시 None(무음절단 금지)."""
+    future = [r for r in panel.series[ticker].rows if r.date > t]
+    if len(future) <= horizon:
         return None
     entry = future[0].close
-    target = future[min(horizon, len(future)) - 1].close
-    return (target - entry) / entry if entry > 0 else None
+    if entry <= 0:
+        return None
+    return (future[horizon].close - entry) / entry
 
 
 def _mae(panel: Panel, ticker: str, t: date, horizon: int) -> Decimal | None:
-    rows = panel.series[ticker].rows
-    future = [r for r in rows if r.date > t][:horizon]
-    if not future:
+    """fwd-return 과 동일 구간(entry 후 1..horizon 봉)의 저가 기준 최대역행.
+
+    horizon 미확보 시 None."""
+    future = [r for r in panel.series[ticker].rows if r.date > t]
+    if len(future) <= horizon:
         return None
     entry = future[0].close
-    return metrics.max_adverse_excursion(entry, [r.low for r in future])
+    return metrics.max_adverse_excursion(entry, [r.low for r in future[1 : horizon + 1]])
 
 
 def run_backtest(panel: Panel, cfg: BacktestConfig) -> BacktestResult:
@@ -134,8 +141,8 @@ def run_backtest(panel: Panel, cfg: BacktestConfig) -> BacktestResult:
             nxt = dates[i + 1]
             rets: list[Decimal] = []
             for tk in picks:
-                a = panel.price_on_or_after(tk, t)
-                b = panel.price_on_or_after(tk, nxt)
+                a = panel.price_on_or_after(tk, t + timedelta(days=1))
+                b = panel.price_on_or_after(tk, nxt + timedelta(days=1))
                 if a and b and a > 0:
                     rets.append((b - a) / a)
             if rets:
