@@ -57,6 +57,15 @@ def render_markdown(result: BacktestResult, cfg: BacktestConfig) -> str:
     ]
     for h, b in sorted(result.event_study.items()):
         lines.append(f"| {h}일 | {b.monotonicity} | {b.mae:.4f} | {b.win_rate} | {b.n} |")
+    lines += [
+        "",
+        "## 후보 팩터 예측력 (forward-return 단조성)",
+        "| 팩터 | 호라이즌 | 단조성 | 승률 | N |",
+        "|---|---|---|---|---|",
+    ]
+    for fname, buckets in result.factor_study.items():
+        for h, b in sorted(buckets.items()):
+            lines.append(f"| {fname} | {h}일 | {b.monotonicity} | {b.win_rate} | {b.n} |")
     lines += ["", "> 수익 보장 없음. 룩어헤드 0(≤T 슬라이스)·생존편향 근사(상장구간) 가드 적용."]
     return "\n".join(lines)
 
@@ -80,6 +89,13 @@ def render_json(result: BacktestResult, cfg: BacktestConfig) -> dict[str, Any]:
                 "n": b.n,
             }
             for h, b in result.event_study.items()
+        },
+        "factor_study": {
+            fname: {
+                str(h): {"monotonicity": str(b.monotonicity), "win_rate": str(b.win_rate), "n": b.n}
+                for h, b in buckets.items()
+            }
+            for fname, buckets in result.factor_study.items()
         },
     }
 

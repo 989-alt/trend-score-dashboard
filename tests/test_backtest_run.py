@@ -55,6 +55,27 @@ def test_benchmark_nav_parallels_portfolio() -> None:
     assert result.benchmark_nav[0] == Decimal("1")
 
 
+def test_factor_study_evaluates_quality() -> None:
+    panel = make_panel()
+    cfg = BacktestConfig(start=date(2023, 1, 2), end=date(2023, 9, 1), rebalance="monthly", top_n=1)
+    result = run_backtest(panel, cfg)
+    assert set(result.factor_study.keys()) >= {"roe", "op_margin", "eps_growth"}
+    assert any(b.n > 0 for b in result.factor_study["roe"].values()), "ROE 예측력이 평가돼야 함"
+
+
+def test_quality_tilt_is_not_a_noop() -> None:
+    from backend.backtest.run import _score_at
+    from backend.config import get_settings
+
+    panel = make_panel()
+    settings = get_settings()
+    t = date(2023, 8, 30)  # 000001 이 적격(≥200봉)인 시점
+    base = _score_at(panel, t, settings, "baseline")
+    tilt = _score_at(panel, t, settings, "quality_tilt")
+    assert base and tilt, "이 시점에 채점된 후보가 있어야 함"
+    assert base != tilt, "quality_tilt 가 baseline 과 점수가 달라야 함(no-op 아님)"
+
+
 def test_main_writes_reports_offline(monkeypatch, tmp_path) -> None:
     from backend.backtest import run as run_mod
     from tests.fixtures.backtest_synth import make_panel

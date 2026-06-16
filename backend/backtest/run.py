@@ -44,6 +44,7 @@ class BacktestResult:
     benchmark_nav: list[Decimal]
     rebalance_dates: list[date]
     event_study: dict[int, EventStudyBucket]
+    factor_study: dict[str, dict[int, EventStudyBucket]]
     turnover_count: int
 
 
@@ -68,7 +69,28 @@ def _index_momentum(panel: Panel, t: date, settings: Settings) -> Decimal:
     return sc.compute_momentum(idx) if len(idx) >= 2 else Decimal("0")
 
 
-def _score_at(panel: Panel, t: date, settings: Settings) -> list[tuple[str, Decimal]]:
+_QUALITY_FACTORS = ("roe", "op_margin", "eps_growth")
+
+
+def _quality_norm(panel: Panel, tickers: list[str], t: date) -> dict[str, Decimal]:
+    """후보군 횡단면 퀄리티 합성 순위점수(0~1). as-of 퀄리티 팩터 평균의 min-max."""
+    raw: dict[str, Decimal] = {}
+    for tk in tickers:
+        f = panel.fundamentals_asof(tk, t)
+        if f is None:
+            continue
+        vals = [v for v in (f.roe, f.op_margin, f.eps_growth) if v is not None]
+        if vals:
+            raw[tk] = sum(vals, Decimal("0")) / Decimal(len(vals))
+    if not raw:
+        return {}
+    lo, hi = min(raw.values()), max(raw.values())
+    return {tk: sc.min_max_norm(v, lo, hi) for tk, v in raw.items()}
+
+
+def _score_at(
+    panel: Panel, t: date, settings: Settings, preset: str = "baseline"
+) -> list[tuple[str, Decimal]]:
     idx_mom = _index_momentum(panel, t, settings)
     cands: list[sc.Candidate] = []
     for ticker in panel.universe_asof(t):
@@ -92,7 +114,15 @@ def _score_at(panel: Panel, t: date, settings: Settings) -> list[tuple[str, Deci
         )
     eligible = [c for c in cands if c.eligible]
     scored = sc.score_candidates(eligible, settings)
-    return sorted(((tk, sv) for tk, (sv, _) in scored.items()), key=lambda x: x[1], reverse=True)
+    base = {tk: sv for tk, (sv, _) in scored.items()}
+    if preset == "quality_tilt":
+        qnorm = _quality_norm(panel, list(base.keys()), t)
+        w = Decimal("0.08")  # 리웨이트 스펙 prior — 퀄리티 틸트 가중
+        base = {
+            tk: sv * (Decimal("1") - w) + qnorm.get(tk, Decimal("0.5")) * w
+            for tk, sv in base.items()
+        }
+    return sorted(base.items(), key=lambda x: x[1], reverse=True)
 
 
 def _index_price_on_or_after(panel: Panel, d: date) -> Decimal | None:
@@ -135,8 +165,15 @@ def run_backtest(panel: Panel, cfg: BacktestConfig) -> BacktestResult:
     es_fwd: dict[int, list[Decimal]] = {h: [] for h in cfg.forward_horizons}
     es_mae: dict[int, list[Decimal]] = {h: [] for h in cfg.forward_horizons}
 
+    fs_vals: dict[str, dict[int, list[Decimal]]] = {
+        f: {h: [] for h in cfg.forward_horizons} for f in _QUALITY_FACTORS
+    }
+    fs_fwd: dict[str, dict[int, list[Decimal]]] = {
+        f: {h: [] for h in cfg.forward_horizons} for f in _QUALITY_FACTORS
+    }
+
     for i, t in enumerate(dates):
-        ranked = _score_at(panel, t, settings)
+        ranked = _score_at(panel, t, settings, cfg.preset)
         picks = [tk for tk, _ in ranked[: cfg.top_n]]
         for tk, sv in ranked:
             for h in cfg.forward_horizons:
@@ -146,6 +183,17 @@ def run_backtest(panel: Panel, cfg: BacktestConfig) -> BacktestResult:
                     es_scores[h].append(sv)
                     es_fwd[h].append(fr)
                     es_mae[h].append(mae)
+            fund = panel.fundamentals_asof(tk, t)
+            if fund is not None:
+                fmap = {"roe": fund.roe, "op_margin": fund.op_margin, "eps_growth": fund.eps_growth}
+                for h in cfg.forward_horizons:
+                    fr = _fwd_return(panel, tk, t, h)
+                    if fr is None:
+                        continue
+                    for fname, fval in fmap.items():
+                        if fval is not None:
+                            fs_vals[fname][h].append(fval)
+                            fs_fwd[fname][h].append(fr)
         if i + 1 < len(dates) and picks:
             nxt = dates[i + 1]
             rets: list[Decimal] = []
@@ -181,11 +229,24 @@ def run_backtest(panel: Panel, cfg: BacktestConfig) -> BacktestResult:
         )
         for h in cfg.forward_horizons
     }
+    factor_study = {
+        fname: {
+            h: EventStudyBucket(
+                monotonicity=metrics.spearman_monotonicity(fs_vals[fname][h], fs_fwd[fname][h]),
+                mae=Decimal("0"),
+                win_rate=metrics.win_rate(fs_fwd[fname][h]),
+                n=len(fs_fwd[fname][h]),
+            )
+            for h in cfg.forward_horizons
+        }
+        for fname in _QUALITY_FACTORS
+    }
     return BacktestResult(
         portfolio_nav=nav,
         benchmark_nav=benchmark_nav,
         rebalance_dates=dates,
         event_study=event_study,
+        factor_study=factor_study,
         turnover_count=turnover_count,
     )
 
