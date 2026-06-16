@@ -59,7 +59,7 @@ def test_factor_study_evaluates_quality() -> None:
     panel = make_panel()
     cfg = BacktestConfig(start=date(2023, 1, 2), end=date(2023, 9, 1), rebalance="monthly", top_n=1)
     result = run_backtest(panel, cfg)
-    assert set(result.factor_study.keys()) >= {"roe", "op_margin", "eps_growth", "per", "pbr"}
+    assert set(result.factor_study.keys()) >= {"roe", "op_margin", "rev_growth", "per", "pbr"}
     assert any(b.n > 0 for b in result.factor_study["roe"].values()), "ROE 예측력이 평가돼야 함"
     assert any(b.n > 0 for b in result.factor_study["per"].values()), "PER 예측력이 평가돼야 함"
 

@@ -16,7 +16,7 @@ class AsOfFundamentals:
     rcept_date: date
     roe: Decimal | None = None
     op_margin: Decimal | None = None
-    eps_growth: Decimal | None = None
+    rev_growth: Decimal | None = None
 
 
 @dataclass(frozen=True)

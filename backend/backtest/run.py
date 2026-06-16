@@ -69,7 +69,7 @@ def _index_momentum(panel: Panel, t: date, settings: Settings) -> Decimal:
     return sc.compute_momentum(idx) if len(idx) >= 2 else Decimal("0")
 
 
-_QUALITY_FACTORS = ("roe", "op_margin", "eps_growth")
+_QUALITY_FACTORS = ("roe", "op_margin", "rev_growth")
 _VALUE_FACTORS = ("per", "pbr")
 _STUDY_FACTORS = _QUALITY_FACTORS + _VALUE_FACTORS
 
@@ -81,7 +81,7 @@ def _quality_norm(panel: Panel, tickers: list[str], t: date) -> dict[str, Decima
         f = panel.fundamentals_asof(tk, t)
         if f is None:
             continue
-        vals = [v for v in (f.roe, f.op_margin, f.eps_growth) if v is not None]
+        vals = [v for v in (f.roe, f.op_margin, f.rev_growth) if v is not None]
         if vals:
             raw[tk] = sum(vals, Decimal("0")) / Decimal(len(vals))
     if not raw:
@@ -190,7 +190,7 @@ def run_backtest(panel: Panel, cfg: BacktestConfig) -> BacktestResult:
             factor_vals: dict[str, Decimal | None] = {
                 "roe": fund.roe if fund else None,
                 "op_margin": fund.op_margin if fund else None,
-                "eps_growth": fund.eps_growth if fund else None,
+                "rev_growth": fund.rev_growth if fund else None,
                 "per": val.per if val else None,
                 "pbr": val.pbr if val else None,
             }

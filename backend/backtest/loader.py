@@ -79,7 +79,7 @@ class PanelLoader:
                     rcept_date=date(int(rd[:4]), int(rd[4:6]), int(rd[6:8])),
                     roe=ratios.get("roe"),
                     op_margin=ratios.get("op_margin"),
-                    eps_growth=ratios.get("rev_growth"),  # v1 성장 프록시(매출성장)
+                    rev_growth=ratios.get("rev_growth"),  # v1 성장 프록시(매출성장)
                 )
             )
         return sorted(out, key=lambda f: f.rcept_date)
