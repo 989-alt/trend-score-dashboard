@@ -1,12 +1,13 @@
 """OpenDART 접수일(rcept_dt) 기준 as-of 재무.
 
-corpCode(zip) → corp_code 매핑, list.json → 접수일 목록, fnlttSinglAcntAll.json
+corpCode(zip) → corp_code 매핑, list.json → 접수일·보고서명, fnlttSinglAcntAll.json
 → 전체재무제표 계정. ROE/영업이익률/성장을 결정론 산출. 키는 .env(DART_API_KEY).
 """
 
 from __future__ import annotations
 
 import io
+import re
 import zipfile
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -16,6 +17,9 @@ import httpx
 
 _BASE = "https://opendart.fss.or.kr/api"
 
+#: 보고서 기준월 → DART reprt_code (1Q/반기/3Q/사업보고서).
+_REPRT_BY_MONTH = {"03": "11013", "06": "11012", "09": "11014", "12": "11011"}
+
 
 def _amt(value: str | None) -> Decimal | None:
     if value is None or value in ("", "-"):
@@ -24,6 +28,19 @@ def _amt(value: str | None) -> Decimal | None:
         return Decimal(value.replace(",", ""))
     except InvalidOperation:
         return None
+
+
+def _period_from_report(report_nm: str) -> tuple[str, str] | None:
+    """report_nm("사업보고서 (2023.12)" 등) → (bsns_year, reprt_code).
+
+    list.json 응답은 bsns_year/reprt_code 를 주지 않으므로 보고서명의 "(YYYY.MM)" 에서
+    사업연도·보고서코드를 파싱한다. 정기보고서가 아니거나 패턴 불일치면 None(fail-open).
+    """
+    m = re.search(r"\((\d{4})\.(\d{2})\)", report_nm or "")
+    if m is None:
+        return None
+    code = _REPRT_BY_MONTH.get(m.group(2))
+    return (m.group(1), code) if code else None
 
 
 def _account(accounts: list[dict[str, Any]], name: str, field: str) -> Decimal | None:
@@ -77,7 +94,7 @@ class DartClient:
         return mapping
 
     def _list_filings(self, corp_code: str, bgn: str, end: str) -> list[dict[str, Any]]:
-        """정기보고서(pblntf_ty=A) 목록 — 접수일 포함."""
+        """정기보고서(pblntf_ty=A) 목록 — 접수일·보고서명 포함."""
         r = self._http.get(
             f"{_BASE}/list.json",
             params={
@@ -122,5 +139,16 @@ class DartClient:
             return {}
         return _ratios_from_accounts(list(data.get("list", [])))
 
+    def ratios_for_filing(self, corp_code: str, filing: dict[str, Any]) -> dict[str, Decimal]:
+        """list.json 정기보고서 항목 → 그 보고서의 재무비율.
 
-__all__ = ["DartClient", "_ratios_from_accounts"]
+        보고서명에서 (bsns_year, reprt_code) 를 파싱해 fnlttSinglAcntAll 을 호출한다.
+        파싱 불가하면 빈 dict(fail-open). list.json 은 bsns_year/reprt_code 를 직접 주지 않는다.
+        """
+        period = _period_from_report(filing.get("report_nm", ""))
+        if period is None:
+            return {}
+        return self.financial_ratios(corp_code, period[0], period[1])
+
+
+__all__ = ["DartClient", "_period_from_report", "_ratios_from_accounts"]

@@ -72,7 +72,7 @@ class PanelLoader:
             if not filing or filing["rcept_dt"] in seen:
                 continue
             seen.add(filing["rcept_dt"])
-            ratios = self._dart.financial_ratios(corp, filing["bsns_year"], filing["reprt_code"])
+            ratios = self._dart.ratios_for_filing(corp, filing)
             rd = filing["rcept_dt"]
             out.append(
                 AsOfFundamentals(
@@ -90,26 +90,33 @@ class PanelLoader:
         turnover: dict[date, Decimal] = {}
         for ts, rec in frame.iterrows():
             d = ts.date()
+            close = _d(rec["종가"])
+            volume = _d(rec["거래량"])
             rows.append(
                 OHLCVRow(
                     date=d,
                     open=_d(rec["시가"]),
                     high=_d(rec["고가"]),
                     low=_d(rec["저가"]),
-                    close=_d(rec["종가"]),
-                    volume=_d(rec["거래량"]),
+                    close=close,
+                    volume=volume,
                 )
             )
-            if "거래대금" in rec:
-                turnover[d] = _d(rec["거래대금"])
+            # 거래대금 컬럼이 없으면(pykrx 버전/소스차) 종가×거래량 프록시.
+            turnover[d] = _d(rec["거래대금"]) if "거래대금" in rec else close * volume
         return rows, turnover
 
     def _valuation(self, ticker: str, start: date, end: date) -> Any:
+        # pykrx 밸류(PER/PBR)는 KRX 소스가 인증(KRX_ID/KRX_PW) 요구·일시 장애가 잦다.
+        # 실패는 value 렌즈를 비우되(fail-open) 전체 빌드를 막지 않는다.
         from pykrx import stock
 
-        return stock.get_market_fundamental_by_date(
-            start.strftime("%Y%m%d"), end.strftime("%Y%m%d"), ticker
-        )
+        try:
+            return stock.get_market_fundamental_by_date(
+                start.strftime("%Y%m%d"), end.strftime("%Y%m%d"), ticker
+            )
+        except Exception:
+            return None
 
     @staticmethod
     def _valuation_map(frame: Any) -> dict[date, Valuation]:
