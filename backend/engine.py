@@ -132,39 +132,22 @@ def _collect_raw(
         )
     flow = provider.get_investor_flow(ticker) if market == "KR" else None
 
-    recent = rows[-settings.lookback_days :]
-    momentum = sc.compute_momentum(recent)
-    # RS(지수대비 상대강도) = 종목 모멘텀 − 같은 구간 지수 모멘텀.
-    rs = momentum - index_momentum
-    volatility = sc.compute_annualized_volatility(recent)
-    near_52w = sc.proximity_to_52w_high(rows, high_52w=fundamentals.w52_high)
-    has_pp = sc.pocket_pivot(rows, lookback=settings.pocket_pivot_lookback)
-    ma200 = sc.simple_moving_average(rows, settings.ma200_window)
-    above = sc.above_ma200(rows, settings.ma200_window)
     turnover = quote.turnover if quote.turnover is not None else Decimal("0")
-
-    # 거래대금 임계는 시장별(KR=KRW, US=USD) — 통화가 달라 공통 임계로 비교 불가.
     min_turnover = settings.min_turnover_krw if market == "KR" else settings.min_turnover_usd
-    eligible = sc.passes_hard_filter(
+    from backend.factors import build_candidate  # 지역 import (순환 회피)
+
+    candidate = build_candidate(
+        ticker=ticker,
+        rows=rows,
+        w52_high=fundamentals.w52_high,
+        index_momentum=index_momentum,
         turnover=turnover,
-        momentum=momentum,
-        volatility=volatility,
-        near_52w=near_52w,
-        above_ma200_flag=above,
         min_turnover=min_turnover,
         settings=settings,
+        market=market,
     )
-    candidate = sc.Candidate(
-        ticker=ticker,
-        turnover=turnover,
-        momentum=momentum,
-        rs=rs,
-        volatility=volatility,
-        near_52w=near_52w,
-        has_pocket_pivot=has_pp,
-        above_ma200=above,
-        eligible=eligible,
-    )
+    above = candidate.above_ma200
+    ma200 = sc.simple_moving_average(rows, settings.ma200_window)
     # 이미 받은 fundamentals.name(KR=hts_kor_isnm, US=shortName)을 우선 사용해
     # get_name 의 중복 inquire-price 호출을 제거한다(없을 때만 폴백).
     name = fundamentals.name or provider.get_name(ticker, market)
