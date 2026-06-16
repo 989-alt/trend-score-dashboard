@@ -5,20 +5,32 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from backend.backtest.metrics import cagr, max_drawdown
+from backend.backtest.metrics import annualized_volatility, cagr, max_drawdown
 from backend.backtest.run import BacktestConfig, BacktestResult
+
+_PERIODS_PER_YEAR = {"weekly": 52, "biweekly": 26, "monthly": 12}
 
 
 def _summary(result: BacktestResult, cfg: BacktestConfig) -> dict[str, Any]:
     nav = result.portfolio_nav
-    years = Decimal(max(len(result.rebalance_dates), 1)) / Decimal(
-        "52" if cfg.rebalance == "weekly" else "12"
+    bench = result.benchmark_nav
+    years = Decimal((cfg.end - cfg.start).days) / Decimal("365.25")
+    if years <= 0:
+        years = Decimal("1")
+    periods = _PERIODS_PER_YEAR.get(cfg.rebalance, 12)
+    period_returns = (
+        [nav[i + 1] / nav[i] - Decimal("1") for i in range(len(nav) - 1)] if len(nav) > 1 else []
     )
+    strat_cagr = cagr(nav[0], nav[-1], years=years) if len(nav) > 1 else Decimal("0")
+    bench_cagr = cagr(bench[0], bench[-1], years=years) if len(bench) > 1 else Decimal("0")
     return {
         "final_nav": nav[-1],
         "total_return": nav[-1] - Decimal("1"),
-        "cagr": cagr(nav[0], nav[-1], years=years) if len(nav) > 1 else Decimal("0"),
+        "cagr": strat_cagr,
+        "volatility": annualized_volatility(period_returns, periods),
         "mdd": max_drawdown(nav),
+        "benchmark_cagr": bench_cagr,
+        "excess_cagr": strat_cagr - bench_cagr,
         "turnover_count": result.turnover_count,
     }
 
@@ -34,9 +46,10 @@ def render_markdown(result: BacktestResult, cfg: BacktestConfig) -> str:
         f"- 벤치마크 ^KS11 · 리밸런스 {len(result.rebalance_dates)}회"
         f" · 회전 {result.turnover_count}",
         "",
-        "## 포트폴리오",
-        f"- 최종 NAV {s['final_nav']:.4f} · 누적 {s['total_return']:.4f} "
-        f"· CAGR {s['cagr']:.4f} · MDD {s['mdd']:.4f}",
+        "## 포트폴리오 (vs ^KS11)",
+        f"- 최종 NAV {s['final_nav']:.4f} · 누적 {s['total_return']:.4f} · CAGR {s['cagr']:.4f} "
+        f"· 변동성 {s['volatility']:.4f} · MDD {s['mdd']:.4f}",
+        f"- 벤치마크(^KS11) CAGR {s['benchmark_cagr']:.4f} · 초과 CAGR {s['excess_cagr']:.4f}",
         "",
         "## 이벤트스터디 (점수 vs forward-return)",
         "| 호라이즌 | 단조성(Spearman) | 평균 MAE | 승률 | N |",

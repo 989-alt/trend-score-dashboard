@@ -41,6 +41,7 @@ class EventStudyBucket:
 @dataclass(frozen=True)
 class BacktestResult:
     portfolio_nav: list[Decimal]
+    benchmark_nav: list[Decimal]
     rebalance_dates: list[date]
     event_study: dict[int, EventStudyBucket]
     turnover_count: int
@@ -94,6 +95,13 @@ def _score_at(panel: Panel, t: date, settings: Settings) -> list[tuple[str, Deci
     return sorted(((tk, sv) for tk, (sv, _) in scored.items()), key=lambda x: x[1], reverse=True)
 
 
+def _index_price_on_or_after(panel: Panel, d: date) -> Decimal | None:
+    for r in panel.index_rows:
+        if r.date >= d:
+            return r.close
+    return None
+
+
 def _fwd_return(panel: Panel, ticker: str, t: date, horizon: int) -> Decimal | None:
     """entry=T+1 첫 봉, horizon 봉 뒤 종가 수익률. horizon 봉 미확보 시 None(무음절단 금지)."""
     future = [r for r in panel.series[ticker].rows if r.date > t]
@@ -120,6 +128,7 @@ def run_backtest(panel: Panel, cfg: BacktestConfig) -> BacktestResult:
     settings = get_settings()
     dates = _rebalance_dates(panel, cfg)
     nav = [Decimal("1")]
+    benchmark_nav: list[Decimal] = [Decimal("1")]
     held: set[str] = set()
     turnover_count = 0
     es_scores: dict[int, list[Decimal]] = {h: [] for h in cfg.forward_horizons}
@@ -154,6 +163,10 @@ def run_backtest(panel: Panel, cfg: BacktestConfig) -> BacktestResult:
                 nav.append(nav[-1] * (Decimal("1") + gross - cost))
                 turnover_count += churn
                 held = set(picks)
+                ia = _index_price_on_or_after(panel, t + timedelta(days=1))
+                ib = _index_price_on_or_after(panel, nxt + timedelta(days=1))
+                bench_ret = (ib / ia - Decimal("1")) if (ia and ib and ia > 0) else Decimal("0")
+                benchmark_nav.append(benchmark_nav[-1] * (Decimal("1") + bench_ret))
 
     event_study = {
         h: EventStudyBucket(
@@ -170,6 +183,7 @@ def run_backtest(panel: Panel, cfg: BacktestConfig) -> BacktestResult:
     }
     return BacktestResult(
         portfolio_nav=nav,
+        benchmark_nav=benchmark_nav,
         rebalance_dates=dates,
         event_study=event_study,
         turnover_count=turnover_count,
@@ -180,6 +194,11 @@ __all__ = ["BacktestConfig", "BacktestResult", "EventStudyBucket", "run_backtest
 
 
 def main(argv: list[str] | None = None) -> int:
+    import sys
+
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")  # Windows cp949 콘솔 유니코드 인쇄 가드
+
     import argparse
     import json
     import os

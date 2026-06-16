@@ -40,9 +40,19 @@ def test_report_render_has_assumptions_and_metrics() -> None:
     result = run_backtest(panel, cfg)
     md = render_markdown(result, cfg)
     assert "가정" in md and "이벤트스터디" in md and "41" in md
+    assert "벤치마크" in md and "변동성" in md
     js = render_json(result, cfg)
     assert js["config"]["cost_bps"] == "41"
     assert "event_study" in js
+    assert "volatility" in js["summary"] and "benchmark_cagr" in js["summary"]
+
+
+def test_benchmark_nav_parallels_portfolio() -> None:
+    panel = make_panel()
+    cfg = BacktestConfig(start=date(2023, 1, 2), end=date(2023, 9, 1), rebalance="monthly", top_n=1)
+    result = run_backtest(panel, cfg)
+    assert len(result.benchmark_nav) == len(result.portfolio_nav)
+    assert result.benchmark_nav[0] == Decimal("1")
 
 
 def test_main_writes_reports_offline(monkeypatch, tmp_path) -> None:

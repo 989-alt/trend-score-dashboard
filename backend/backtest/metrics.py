@@ -79,7 +79,19 @@ def cagr(start: Decimal, end: Decimal, *, years: Decimal) -> Decimal:
     return Decimal(str(val)).quantize(Decimal("0.000001"))
 
 
+def annualized_volatility(returns: list[Decimal], periods_per_year: int) -> Decimal:
+    """기간수익률 표준편차 × √(periods_per_year). 표본<2 이면 0."""
+    n = len(returns)
+    if n < 2:
+        return Decimal("0")
+    mean = sum(returns, Decimal("0")) / Decimal(n)
+    var = sum(((r - mean) ** 2 for r in returns), Decimal("0")) / Decimal(n)
+    std = Decimal(str(math.sqrt(float(var))))
+    return (std * Decimal(str(math.sqrt(periods_per_year)))).quantize(Decimal("0.0001"))
+
+
 __all__ = [
+    "annualized_volatility",
     "cagr",
     "max_adverse_excursion",
     "max_drawdown",
