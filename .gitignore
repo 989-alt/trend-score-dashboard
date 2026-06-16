@@ -31,3 +31,6 @@ frontend/.vite/
 Thumbs.db
 .idea/
 .vscode/
+
+# 백테스트 하니스 산출물(생성물)
+/data/backtest/
