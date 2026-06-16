@@ -18,10 +18,7 @@ def _rows(closes: list[int]) -> list[OHLCVRow]:
     for i, c in enumerate(closes):
         cd = Decimal(c)
         # 홀짝 교번으로 당일 종가를 ±2% 흔들어 vol 을 현실적으로 만든다.
-        if i % 2 == 0:
-            close = cd * Decimal("1.02")
-        else:
-            close = cd * Decimal("0.98")
+        close = cd * Decimal("1.02") if i % 2 == 0 else cd * Decimal("0.98")
         out.append(
             OHLCVRow(
                 date=date(2024, 1, 1) + timedelta(days=i),
