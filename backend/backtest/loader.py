@@ -38,11 +38,15 @@ class PanelLoader:
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _ohlcv(self, ticker: str, start: date, end: date) -> Any:
+        # 대규모 유니버스: 종목별 pykrx 실패가 전체 빌드를 막지 않게 None 반환(build 가 skip).
         from pykrx import stock
 
-        return stock.get_market_ohlcv_by_date(
-            start.strftime("%Y%m%d"), end.strftime("%Y%m%d"), ticker
-        )
+        try:
+            return stock.get_market_ohlcv_by_date(
+                start.strftime("%Y%m%d"), end.strftime("%Y%m%d"), ticker
+            )
+        except Exception:
+            return None
 
     def _index_ohlcv(self, start: date, end: date) -> Any:
         import yfinance as yf
@@ -62,17 +66,24 @@ class PanelLoader:
     def _fundamentals(self, ticker: str) -> list[AsOfFundamentals]:
         if self._dart is None:
             return []
-        corp = self._dart.corp_code(ticker)
+        # DART 호출 실패(레이트리밋·5xx·파싱)는 해당 종목 퀄리티를 비우되(fail-open) 전체를 막지 않는다.
+        try:
+            corp = self._dart.corp_code(ticker)
+        except Exception:
+            return []
         if corp is None:
             return []
         out: list[AsOfFundamentals] = []
         seen: set[str] = set()
         for yr in range(date.today().year - 6, date.today().year + 1):
-            filing = self._dart.latest_filing_on_or_before(corp, date(yr, 12, 31))
-            if not filing or filing["rcept_dt"] in seen:
+            try:
+                filing = self._dart.latest_filing_on_or_before(corp, date(yr, 12, 31))
+                if not filing or filing["rcept_dt"] in seen:
+                    continue
+                seen.add(filing["rcept_dt"])
+                ratios = self._dart.ratios_for_filing(corp, filing)
+            except Exception:
                 continue
-            seen.add(filing["rcept_dt"])
-            ratios = self._dart.ratios_for_filing(corp, filing)
             rd = filing["rcept_dt"]
             out.append(
                 AsOfFundamentals(
