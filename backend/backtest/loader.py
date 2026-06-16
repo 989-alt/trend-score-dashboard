@@ -43,7 +43,11 @@ class PanelLoader:
             start=start.isoformat(), end=end.isoformat(), auto_adjust=False
         )
         col_map = {
-            "Open": "시가", "High": "고가", "Low": "저가", "Close": "종가", "Volume": "거래량"
+            "Open": "시가",
+            "High": "고가",
+            "Low": "저가",
+            "Close": "종가",
+            "Volume": "거래량",
         }
         return hist.rename(columns=col_map)
 
