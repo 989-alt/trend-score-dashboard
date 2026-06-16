@@ -29,3 +29,17 @@ def test_run_backtest_baseline_deterministic() -> None:
         "이벤트스터디에 채점된 후보가 있어야 함"
     )
     assert len(result.portfolio_nav) > 1, "픽이 발생해 NAV 가 진화해야 함"
+
+
+def test_report_render_has_assumptions_and_metrics() -> None:
+    from backend.backtest.report import render_json, render_markdown
+    from backend.backtest.run import BacktestConfig
+
+    panel = make_panel()
+    cfg = BacktestConfig(start=date(2023, 1, 2), end=date(2023, 9, 1), rebalance="monthly", top_n=1)
+    result = run_backtest(panel, cfg)
+    md = render_markdown(result, cfg)
+    assert "가정" in md and "이벤트스터디" in md and "41" in md
+    js = render_json(result, cfg)
+    assert js["config"]["cost_bps"] == "41"
+    assert "event_study" in js
