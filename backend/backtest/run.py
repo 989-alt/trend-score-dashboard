@@ -170,3 +170,65 @@ def run_backtest(panel: Panel, cfg: BacktestConfig) -> BacktestResult:
 
 
 __all__ = ["BacktestConfig", "BacktestResult", "EventStudyBucket", "run_backtest"]
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    import json
+    import os
+    from datetime import datetime
+    from pathlib import Path
+
+    from backend.backtest.dart_client import DartClient
+    from backend.backtest.loader import PanelLoader
+    from backend.backtest.report import render_json, render_markdown
+
+    p = argparse.ArgumentParser(description="KR 백테스트 검증 하니스 (오프라인)")
+    p.add_argument("--start", required=True)
+    p.add_argument("--end", required=True)
+    p.add_argument("--rebalance", default="weekly", choices=list(_REBAL_DAYS))
+    p.add_argument("--top-n", type=int, default=20)
+    p.add_argument("--cost-bps", default="41")
+    p.add_argument("--preset", default="baseline", choices=["baseline", "quality_tilt"])
+    p.add_argument("--tickers", default="", help="콤마구분 6자리 코드. 비우면 유니버스 자동(느림)")
+    p.add_argument("--out", default="data/backtest")
+    args = p.parse_args(argv)
+
+    start = datetime.strptime(args.start, "%Y-%m-%d").date()
+    end = datetime.strptime(args.end, "%Y-%m-%d").date()
+    dart_key = os.environ.get("DART_API_KEY")
+    loader = PanelLoader(
+        dart=DartClient(dart_key) if dart_key else None, cache_dir=Path(args.out) / "cache"
+    )
+    tickers = [t.strip().zfill(6) for t in args.tickers.split(",") if t.strip()]
+    if not tickers:
+        from pykrx import stock
+
+        tickers = [
+            str(t).zfill(6)
+            for t in stock.get_market_ticker_list(args.end.replace("-", ""), market="KOSPI")
+        ]
+    panel = loader.build(tickers, start, end)
+    cfg = BacktestConfig(
+        start=start,
+        end=end,
+        rebalance=args.rebalance,
+        top_n=args.top_n,
+        cost_bps=Decimal(args.cost_bps),
+        preset=args.preset,
+    )
+    result = run_backtest(panel, cfg)
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / f"report_{args.preset}.md").write_text(
+        render_markdown(result, cfg), encoding="utf-8"
+    )
+    (out_dir / f"report_{args.preset}.json").write_text(
+        json.dumps(render_json(result, cfg), ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(render_markdown(result, cfg))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -43,3 +43,34 @@ def test_report_render_has_assumptions_and_metrics() -> None:
     js = render_json(result, cfg)
     assert js["config"]["cost_bps"] == "41"
     assert "event_study" in js
+
+
+def test_main_writes_reports_offline(monkeypatch, tmp_path) -> None:
+    from backend.backtest import run as run_mod
+    from tests.fixtures.backtest_synth import make_panel
+
+    # 네트워크 차단: loader.build 를 합성 패널로 대체, DART 키 없음 경로
+    monkeypatch.setattr(
+        "backend.backtest.loader.PanelLoader.build",
+        lambda self, tickers, start, end: make_panel(),
+    )
+    monkeypatch.delenv("DART_API_KEY", raising=False)
+    rc = run_mod.main(
+        [
+            "--start",
+            "2023-01-02",
+            "--end",
+            "2023-09-01",
+            "--rebalance",
+            "monthly",
+            "--top-n",
+            "1",
+            "--tickers",
+            "000001",
+            "--out",
+            str(tmp_path),
+        ]
+    )
+    assert rc == 0
+    assert (tmp_path / "report_baseline.md").exists()
+    assert (tmp_path / "report_baseline.json").exists()
