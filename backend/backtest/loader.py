@@ -66,7 +66,7 @@ class PanelLoader:
     def _fundamentals(self, ticker: str) -> list[AsOfFundamentals]:
         if self._dart is None:
             return []
-        # DART 호출 실패(레이트리밋·5xx·파싱)는 해당 종목 퀄리티를 비우되(fail-open) 전체를 막지 않는다.
+        # DART 실패(레이트리밋·5xx)는 해당 종목 퀄리티만 비움(fail-open).
         try:
             corp = self._dart.corp_code(ticker)
         except Exception:
