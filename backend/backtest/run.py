@@ -15,6 +15,7 @@ from backend.backtest import metrics
 from backend.backtest.panel import Panel
 from backend.config import Settings, get_settings
 from backend.factors import build_candidate
+from backend.schemas import OHLCVRow
 
 _REBAL_DAYS = {"weekly": 7, "biweekly": 14, "monthly": 30}
 
@@ -151,6 +152,8 @@ def _score_at(
 ) -> list[tuple[str, Decimal]]:
     idx_mom = _index_momentum(panel, t, settings)
     cands: list[sc.Candidate] = []
+    # entry_bias 프리셋 전용: ticker 별 rows 를 재사용 위해 stash
+    rows_by_ticker: dict[str, list[OHLCVRow]] = {}
     for ticker in panel.universe_asof(t):
         rows = panel.rows_asof(ticker, t)
         if len(rows) < settings.ma200_window:
@@ -170,6 +173,8 @@ def _score_at(
                 settings=settings,
             )
         )
+        if preset == "entry_bias":
+            rows_by_ticker[ticker] = rows
     eligible = [c for c in cands if c.eligible]
     scored = sc.score_candidates(eligible, settings)
     base = {tk: sv for tk, (sv, _) in scored.items()}
@@ -180,6 +185,28 @@ def _score_at(
             tk: sv * (Decimal("1") - w) + qnorm.get(tk, Decimal("0.5")) * w
             for tk, sv in base.items()
         }
+    elif preset == "entry_bias":
+        # entry_bias: near_52w 0.30→0.18, pullback_3pos 0.12 추가,
+        # 나머지 가중치(pocket_pivot·momentum·rs·turnover·vol_fit) 불변.
+        # extension_guard 승수를 곱해 과도 이격 종목을 하방 조정.
+        # Σ weights = 0.18+0.12+0.20+0.13+0.12+0.15+0.10 = 1.00
+        new_scores: dict[str, Decimal] = {}
+        for tk, (_sv, bd) in scored.items():
+            rows_tk = rows_by_ticker.get(tk, [])
+            pullback = sc.compute_pullback_3pos(rows_tk, settings) if rows_tk else Decimal("0")
+            guard = sc.compute_extension_guard(rows_tk, settings) if rows_tk else Decimal("1")
+            entry = (
+                bd.near_52w * settings.weight_52w_entry  # 0.18 (was 0.30)
+                + pullback * settings.weight_pullback  # 0.12 (freed from 52w)
+                + bd.pocket_pivot * settings.weight_pocket_pivot  # 0.20
+                + bd.momentum_norm * settings.weight_momentum  # 0.13
+                + bd.rs_norm * settings.weight_rs  # 0.12
+                + bd.turnover_norm * settings.weight_turnover  # 0.15
+                + bd.vol_fit * settings.weight_vol_fit  # 0.10
+            )  # Σ = 1.00
+            entry_score = max(Decimal("0"), min(Decimal("1"), entry)) * guard
+            new_scores[tk] = entry_score
+        base = new_scores
     return sorted(base.items(), key=lambda x: x[1], reverse=True)
 
 
@@ -536,7 +563,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--rebalance", default="weekly", choices=list(_REBAL_DAYS))
     p.add_argument("--top-n", type=int, default=20)
     p.add_argument("--cost-bps", default="41")
-    p.add_argument("--preset", default="baseline", choices=["baseline", "quality_tilt"])
+    p.add_argument(
+        "--preset",
+        default="baseline",
+        choices=["baseline", "quality_tilt", "entry_bias"],
+    )
     p.add_argument("--tickers", default="", help="콤마구분 6자리 코드. 비우면 유니버스 자동(느림)")
     p.add_argument("--out", default="data/backtest")
     # Layer C — OOS 앵커드 워크포워드

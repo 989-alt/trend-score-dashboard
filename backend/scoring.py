@@ -289,6 +289,88 @@ def score_candidates(
     return result
 
 
+def compute_extension_guard(rows: list[OHLCVRow], settings: Settings) -> Decimal:
+    """과도 이격 패널티 승수(0 < 결과 ≤ 1).
+
+    주가가 이동평균 대비 지나치게 많이 이격되면 점수에 페널티를 부여해
+    고점 추격(over-extension)을 억제한다.
+
+    - 이격도 ext = (close - MA) / MA  (음수면 MA 아래)
+    - ext ≤ ext_guard_lo               → 1.0 (페널티 없음)
+    - ext ≥ ext_guard_hi               → ext_guard_floor (최대 페널티)
+    - 그 사이                          → 1.0 에서 ext_guard_floor 로 선형 보간
+    - 데이터 부족(MA 계산 불가)         → 1.0 (페널티 없음)
+
+    Decimal 전용. math 보조는 불필요(선형 보간).
+    """
+    ma = simple_moving_average(rows, settings.ext_guard_ma_window)
+    if ma is None or ma == 0:
+        return Decimal("1")
+    ext = (rows[-1].close - ma) / ma
+    lo = settings.ext_guard_lo
+    hi = settings.ext_guard_hi
+    floor = settings.ext_guard_floor
+    if ext <= lo:
+        return Decimal("1")
+    if ext >= hi:
+        return floor
+    # 선형 보간: 1.0 at lo → floor at hi
+    span = hi - lo
+    t_val = (ext - lo) / span  # 0~1 ∈ [lo,hi]
+    return Decimal("1") - t_val * (Decimal("1") - floor)
+
+
+def compute_pullback_3pos(rows: list[OHLCVRow], settings: Settings) -> Decimal:
+    """MA 지지 위에서의 적절한 눌림목 보너스(0~1).
+
+    추세주의 '3단계 매수' 개념: MA 위에 있으면서, 최근 고점 대비 적당히
+    조정(pullback)된 종목에 높은 점수를 준다. 너무 고점에 있거나 너무 많이
+    빠진 종목은 0에 가깝다.
+
+    - MA 를 하회하면 → 0 (지지선 붕괴)
+    - 최근 고점 대비 depth = (recent_high - close) / recent_high
+    - depth 에 대한 삼각형(triangular) 보상:
+        0  at depth=0      (고점 = 눌림목 없음 = 과매수 구간)
+        1  at depth=pullback_ideal  (이상적 눌림목 깊이, 예: 8%)
+        0  at depth=pullback_max   (최대 허용 깊이, 예: 20%)
+        depth > pullback_max → 0 (너무 많이 빠짐 = 추세 이탈 가능)
+    - 데이터 부족 → 0
+
+    Decimal 전용.
+    """
+    ma = simple_moving_average(rows, settings.pullback_ma_window)
+    if ma is None:
+        return Decimal("0")
+    close = rows[-1].close
+    if close < ma:
+        return Decimal("0")  # MA 지지 붕괴 — 3포지션 셋업 아님
+
+    # 최근 pullback_high_window 봉 고가
+    window_rows = rows[-settings.pullback_high_window :]
+    recent_high = max(r.high for r in window_rows)
+    if recent_high <= 0:
+        return Decimal("0")
+
+    depth = (recent_high - close) / recent_high  # 0 = 고점, 양수 = 눌림
+
+    ideal = settings.pullback_ideal
+    max_pb = settings.pullback_max
+
+    if depth <= Decimal("0"):
+        return Decimal("0")  # 고점 돌파 또는 신고가
+    if depth >= max_pb:
+        return Decimal("0")  # 너무 많이 빠짐
+    if depth <= ideal:
+        # 0 → 1 선형 상승 (0 at depth=0, 1 at depth=ideal)
+        return depth / ideal
+    else:
+        # 1 → 0 선형 하락 (1 at depth=ideal, 0 at depth=max)
+        span = max_pb - ideal
+        if span <= 0:
+            return Decimal("0")
+        return (max_pb - depth) / span
+
+
 def grade_for_score(score_100: Decimal, settings: Settings) -> Grade:
     """0~100 점수 → 등급.
 
@@ -313,7 +395,9 @@ __all__ = [
     "FactorBounds",
     "above_ma200",
     "compute_annualized_volatility",
+    "compute_extension_guard",
     "compute_momentum",
+    "compute_pullback_3pos",
     "factor_bounds",
     "grade_for_score",
     "linear_position",
