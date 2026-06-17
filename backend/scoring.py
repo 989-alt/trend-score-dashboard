@@ -118,6 +118,119 @@ def pocket_pivot(rows: list[OHLCVRow], *, lookback: int = 10) -> bool:
     return today.volume > max_down_vol
 
 
+def trend_template(rows: list[OHLCVRow]) -> Decimal:
+    """Minervini 8조건 충족수/8 (0~1). 데이터 부족 조건은 미충족 처리."""
+    if len(rows) < 200:
+        return Decimal("0")
+    p = rows[-1].close
+    ma50 = simple_moving_average(rows, 50)
+    ma150 = simple_moving_average(rows, 150)
+    ma200 = simple_moving_average(rows, 200)
+    ma200_prev = simple_moving_average(rows[:-21], 200) if len(rows) > 221 else None
+    lo252 = min(r.low for r in rows[-252:])
+    hi252 = max(r.high for r in rows[-252:])
+    conds = [
+        ma150 is not None and ma200 is not None and p > ma150 and p > ma200,
+        ma150 is not None and ma200 is not None and ma150 > ma200,
+        ma200 is not None and ma200_prev is not None and ma200 > ma200_prev,
+        ma50 is not None and ma150 is not None and ma200 is not None and ma50 > ma150 > ma200,
+        ma50 is not None and p > ma50,
+        p >= Decimal("1.30") * lo252,
+        p >= Decimal("0.75") * hi252,
+        True,  # RS≥70 은 횡단면 — 합성 단계에서 rs_rank 로 대체(여기선 8번째 자리표시)
+    ]
+    return Decimal(sum(1 for c in conds if c)) / Decimal("8")
+
+
+def ma_alignment(rows: list[OHLCVRow]) -> Decimal:
+    """이동평균 정배열 충족수/4 (0~1). MA 부족(None) 조건은 미충족 처리.
+
+    조건: ``[p > ma50, ma50 > ma150, ma150 > ma200, p > ma200]``. 완전 정배열
+    (P>MA50>MA150>MA200)이면 넷 다 참 → 1.0.
+    """
+    p = rows[-1].close
+    ma50 = simple_moving_average(rows, 50)
+    ma150 = simple_moving_average(rows, 150)
+    ma200 = simple_moving_average(rows, 200)
+    conds = [
+        ma50 is not None and p > ma50,
+        ma50 is not None and ma150 is not None and ma50 > ma150,
+        ma150 is not None and ma200 is not None and ma150 > ma200,
+        ma200 is not None and p > ma200,
+    ]
+    return Decimal(sum(1 for c in conds if c)) / Decimal("4")
+
+
+def mom_12_1(rows: list[OHLCVRow]) -> Decimal:
+    """12개월−1개월 모멘텀. 데이터(<252봉) 부족 또는 기준가 0 이면 ``Decimal("0")``.
+
+    ``c_then = rows[-252].close``, ``c_recent = rows[-21].close`` →
+    ``c_recent / c_then − 1``. 최근 1개월은 단기 반전 노이즈라 제외한다.
+    """
+    if len(rows) < 252:
+        return Decimal("0")
+    c_then = rows[-252].close
+    c_recent = rows[-21].close
+    if c_then == 0:
+        return Decimal("0")
+    return c_recent / c_then - Decimal("1")
+
+
+def volume_surge(rows: list[OHLCVRow]) -> Decimal:
+    """당일 거래량 급증도 ``clamp((vol[-1]/SMA(vol,20) − 1)/2, 0, 1)``.
+
+    SMA(vol,20)은 최근 20봉 ``volume`` 평균(종가 아님 — 직접 계산). 데이터(<20봉)
+    부족 또는 20일 거래량 평균 0 이면 ``Decimal("0")``. 결과는 ``[0,1]`` 클램프.
+    """
+    if len(rows) < 20:
+        return Decimal("0")
+    vols = [r.volume for r in rows[-20:]]
+    avg = sum(vols, Decimal("0")) / Decimal("20")
+    if avg == 0:
+        return Decimal("0")
+    raw = (rows[-1].volume / avg - Decimal("1")) / Decimal("2")
+    return max(Decimal("0"), min(Decimal("1"), raw))
+
+
+def atr20_over_price(rows: list[OHLCVRow]) -> Decimal:
+    """원시 ATR20 / 현재가 (정규화 없음 — 횡단면 정규화는 합성 단계).
+
+    True Range(i≥1) = ``max(high−low, |high−close_prev|, |low−close_prev|)``.
+    ATR20 = 최근 20개 TR 단순평균(20개 TR 위해 ≥21봉 필요). 데이터(<21봉) 부족 또는
+    현재가 0 이면 ``Decimal("0")``.
+    """
+    if len(rows) < 21:
+        return Decimal("0")
+    trs: list[Decimal] = []
+    for prev, curr in pairwise(rows[-21:]):
+        tr = max(
+            curr.high - curr.low,
+            abs(curr.high - prev.close),
+            abs(curr.low - prev.close),
+        )
+        trs.append(tr)
+    atr20 = sum(trs, Decimal("0")) / Decimal("20")
+    price = rows[-1].close
+    if price == 0:
+        return Decimal("0")
+    return atr20 / price
+
+
+def vol_dryup(rows: list[OHLCVRow]) -> Decimal:
+    """거래량 마름 프록시 ``SMA(vol,5) / SMA(vol,50)`` (원시값).
+
+    데이터(<50봉) 부족 또는 50일 거래량 평균 0 이면 ``Decimal("0")``. 최근 거래량이
+    장기 평균보다 잦아들면(눌림목 건조) <1.
+    """
+    if len(rows) < 50:
+        return Decimal("0")
+    sma5 = sum((r.volume for r in rows[-5:]), Decimal("0")) / Decimal("5")
+    sma50 = sum((r.volume for r in rows[-50:]), Decimal("0")) / Decimal("50")
+    if sma50 == 0:
+        return Decimal("0")
+    return sma5 / sma50
+
+
 def volatility_fit(value: Decimal, low: Decimal, high: Decimal) -> Decimal:
     """변동성 밴드 적합도 — 삼각형 gradient. 밴드 중심 1.0, 양 끝/밖 0.0."""
     if value < low or value > high:
@@ -394,6 +507,7 @@ __all__ = [
     "Candidate",
     "FactorBounds",
     "above_ma200",
+    "atr20_over_price",
     "compute_annualized_volatility",
     "compute_extension_guard",
     "compute_momentum",
@@ -401,11 +515,16 @@ __all__ = [
     "factor_bounds",
     "grade_for_score",
     "linear_position",
+    "ma_alignment",
     "min_max_norm",
+    "mom_12_1",
     "passes_hard_filter",
     "pocket_pivot",
     "proximity_to_52w_high",
     "score_candidates",
     "simple_moving_average",
+    "trend_template",
+    "vol_dryup",
     "volatility_fit",
+    "volume_surge",
 ]
