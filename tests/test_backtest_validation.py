@@ -118,18 +118,22 @@ def _make_signal_panel(
     *,
     forward_coupled: bool = True,
     fwd_seed: int = 0,
+    fwd_noise_seed: int | None = None,
+    fwd_noise_scale: float = 0.0,
     n_trailing: int = 260,
     n_forward: int = 65,
 ) -> tuple[Panel, date]:
     """K개 합성 종목 패널 + 리밸런스 기준일 T.
 
     strengths ∈ [0.2, 1.0] 균등 분포. trailing_slope = strength × _SLOPE_SCALE.
-    forward_coupled=True  → forward_slope = trailing_slope  (신호 패널)
+    forward_coupled=True  → forward_slope = trailing_slope + optional noise
+                            (신호 패널; fwd_noise_scale>0 이면 mild noise 주입)
     forward_coupled=False → forward_slope = random.Random(fwd_seed)가 생성하는 독립값
                             (노이즈 패널 — T 이후 방향이 trailing 과 무관).
     반환: (Panel, T)  where T = start + n_trailing - 1 일.
     """
     fwd_rng = random.Random(fwd_seed)
+    noise_rng = random.Random(fwd_noise_seed) if fwd_noise_seed is not None else None
     start = date(2020, 1, 2)
     strengths = [0.2 + 0.8 * i / (n_tickers - 1) for i in range(n_tickers)]
 
@@ -140,8 +144,17 @@ def _make_signal_panel(
     for i, s in enumerate(strengths):
         ticker = f"{i + 1:06d}"
         t_slope = s * _SLOPE_SCALE
-        # 대칭 균등 분포 [-_SLOPE_SCALE, +_SLOPE_SCALE] — trailing 강도와 독립
-        f_slope = t_slope if forward_coupled else (fwd_rng.random() - 0.5) * _SLOPE_SCALE * 2
+        if forward_coupled:
+            # 신호 패널: noise_rng 있으면 mild noise 주입(signal dominates)
+            noise = (
+                (noise_rng.random() - 0.5) * 2.0 * fwd_noise_scale
+                if (noise_rng is not None and fwd_noise_scale > 0)
+                else 0.0
+            )
+            f_slope = t_slope + noise
+        else:
+            # 노이즈 패널: 대칭 균등 분포 [-_SLOPE_SCALE, +_SLOPE_SCALE] — trailing 강도와 독립
+            f_slope = (fwd_rng.random() - 0.5) * _SLOPE_SCALE * 2
 
         series[ticker] = _make_eligible_series(
             ticker,
@@ -234,18 +247,30 @@ def test_monotonicity_near_zero_on_independent_noise() -> None:
 
 
 def test_event_study_recovers_signal_end_to_end() -> None:
-    """K=20 종목, 잠재 강도 sᵢ 가 점수와 forward-return 양방에 나타남.
+    """K=100 종목, 잠재 강도 sᵢ 가 점수와 forward-return 양방에 나타남.
 
     구성:
     - trailing_slope ∝ sᵢ → near_52w·momentum 높음 → 점수 높음.
-    - forward_slope  = trailing_slope (coupled) → fwd-return 높음.
+    - forward_slope  = trailing_slope + mild noise (coupled, signal dominates).
+      noise: random.Random(7) 로 ±noise_scale=20 균등 노이즈 주입.
+      SNR: signal_range(160) / noise_scale(20) = 8 — 신호 지배적.
     - 단일 리밸런스 T(cfg.end=T) → score window(≤T) ⊥ fwd window(>T).
 
-    통과 조건: n > 0 AND monotonicity > 0.3.
-    실측값(slope_scale=200, K=20): n=20, monotonicity=1.0000.
+    노이즈 주입 목적: monotonicity 가 정확히 1.0000 이 되지 않도록 함으로써
+    rank-order 왜곡(지평 오프바이원 등)을 탐지할 수 있는 진짜 회복 테스트로 만든다.
+
+    통과 조건: n > 0 AND monotonicity > 0.7.
+    실측값(slope_scale=200, K=100, noise_seed=7, noise_scale=20):
+      n=100, monotonicity=0.7484.
     """
-    n_tickers = 20
-    panel, t = _make_signal_panel(n_tickers, forward_coupled=True)
+    n_tickers = 100
+    # fwd_noise_seed=7, fwd_noise_scale=20: mono=0.7484 (>>0.7, !=1.0, 신호 회복 확인).
+    panel, t = _make_signal_panel(
+        n_tickers,
+        forward_coupled=True,
+        fwd_noise_seed=7,
+        fwd_noise_scale=20.0,
+    )
     cfg = _single_rebalance_cfg(t, n_tickers)
 
     result = run_backtest(panel, cfg)
@@ -254,7 +279,7 @@ def test_event_study_recovers_signal_end_to_end() -> None:
     assert bucket.n > 0, (
         f"이벤트스터디에 채점된 후보 없음: n={bucket.n}. 적격 종목이 없거나 포워드 구간 부족."
     )
-    assert bucket.monotonicity > Decimal("0.3"), (
+    assert bucket.monotonicity > Decimal("0.7"), (
         f"심어진 신호를 회복하지 못함: monotonicity={bucket.monotonicity}, n={bucket.n}. "
         "하니스가 횡단면 랭킹 신호를 측정하는 계측기로서 실패."
     )
@@ -266,28 +291,35 @@ def test_event_study_recovers_signal_end_to_end() -> None:
 
 
 def test_event_study_near_zero_on_noise_panel_end_to_end() -> None:
-    """K=20 종목에서 점수 결정 요인(trailing)과 forward 방향을 분리.
+    """K=100 종목에서 점수 결정 요인(trailing)과 forward 방향을 분리.
 
     구성:
     - trailing_slope ∝ sᵢ (점수 결정).
-    - forward_slope  = random.Random(0)의 독립 균등 난수 (T 이후 방향 무관).
+    - forward_slope  = random.Random(fwd_seed)의 독립 균등 난수 (T 이후 방향 무관).
     - 단일 리밸런스 T → score window(≤T) ⊥ fwd window(>T).
 
-    통과 조건: n > 0 AND |monotonicity| < 0.3.
-    실측값(fwd_seed=0): n=20, monotonicity=0.0647 (≈0.07 — 노이즈 수준).
+    시드 선택 원칙 (cherry-pick 방지):
+      seed=1,2,3,... 순으로 탐색하여 생성된 포워드 기울기와 트레일링 기울기의
+      Pearson 상관 |r| < 0.05 를 최초로 만족하는 시드를 사용한다.
+      → fwd_seed=2: |r| = 0.000827 (< 0.05 조건 충족, 원칙적 선택).
+
+    N=100 에서 Spearman SE ≈ 0.10 이므로 0.15 임계값은 ≈1.5σ 수준.
+    통과 조건: n > 0 AND |monotonicity| < 0.15.
+    실측값(fwd_seed=2, K=100): n=100, monotonicity=-0.0605.
 
     이 테스트가 실패하면 하니스가 없는 신호를 만들어 낼 수 있음을 의미한다.
     """
-    n_tickers = 20
-    # fwd_seed=0: 실측 mono=0.0647 (<<0.3). 결정론 보장.
-    panel, t = _make_signal_panel(n_tickers, forward_coupled=False, fwd_seed=0)
+    n_tickers = 100
+    # fwd_seed=2: Pearson(trailing_slopes, forward_slopes) r=0.000827 (|r|<0.05, 원칙적 선택).
+    # 실측 mono=-0.0605 (<<0.15). 결정론 보장.
+    panel, t = _make_signal_panel(n_tickers, forward_coupled=False, fwd_seed=2)
     cfg = _single_rebalance_cfg(t, n_tickers)
 
     result = run_backtest(panel, cfg)
     bucket = result.event_study[20]
 
     assert bucket.n > 0, f"n={bucket.n}: 적격 종목 없음 — 노이즈 패널도 n>0 이어야 함."
-    assert abs(bucket.monotonicity) < Decimal("0.3"), (
+    assert abs(bucket.monotonicity) < Decimal("0.15"), (
         f"노이즈 패널에서 가짜 신호 감지: monotonicity={bucket.monotonicity}, n={bucket.n}. "
         "하니스가 존재하지 않는 신호를 만들어 낼 수 있음."
     )
