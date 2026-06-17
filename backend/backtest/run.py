@@ -631,7 +631,13 @@ def main(argv: list[str] | None = None) -> int:
         default="baseline",
         choices=["baseline", "quality_tilt", "entry_bias", "alpha_composite", "fallback_c"],
     )
-    p.add_argument("--tickers", default="", help="콤마구분 6자리 코드. 비우면 유니버스 자동(느림)")
+    p.add_argument(
+        "--market",
+        default="KR",
+        choices=["KR", "US"],
+        help="시장 (KR=국장 .KS/.KQ·^KS11, US=미장 무접미사·^GSPC)",
+    )
+    p.add_argument("--tickers", default="", help="콤마구분 종목 코드. 비우면 유니버스 자동(느림)")
     p.add_argument("--out", default="data/backtest")
     # Layer C — OOS 앵커드 워크포워드
     p.add_argument(
@@ -692,15 +698,26 @@ def main(argv: list[str] | None = None) -> int:
     end = datetime.strptime(args.end, "%Y-%m-%d").date()
     dart_key = os.environ.get("DART_API_KEY")
     loader = PanelLoader(
-        dart=DartClient(dart_key) if dart_key else None, cache_dir=Path(args.out) / "cache"
+        dart=DartClient(dart_key) if (dart_key and args.market == "KR") else None,
+        cache_dir=Path(args.out) / "cache",
+        market=args.market,
     )
-    tickers = [t.strip().zfill(6) for t in args.tickers.split(",") if t.strip()]
-    if not tickers and (args.horserace or args.fallback_c):
-        from backend.backtest.universe import build_kr_universe
-
-        tickers = build_kr_universe(args.universe_top_n, Path(args.out) / "cache")
+    tickers = [
+        t.strip() if args.market == "US" else t.strip().zfill(6)
+        for t in args.tickers.split(",")
+        if t.strip()
+    ]
     if not tickers:
-        from pykrx import stock
+        if args.market == "US":
+            from backend.backtest.universe import US_UNIVERSE
+
+            tickers = list(US_UNIVERSE)
+        elif args.horserace or args.fallback_c:
+            from backend.backtest.universe import build_kr_universe
+
+            tickers = build_kr_universe(args.universe_top_n, Path(args.out) / "cache")
+    if not tickers:
+        from pykrx import stock  # KR fallback
 
         tickers = [
             str(t).zfill(6)

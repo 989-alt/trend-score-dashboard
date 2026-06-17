@@ -187,6 +187,10 @@ class PanelLoader:
         # pykrx 밸류(PER/PBR)는 KRX 소스가 인증(KRX_ID/KRX_PW) 요구·일시 장애가 잦다.
         # 실패는 value 렌즈를 비우되(fail-open) 전체 빌드를 막지 않는다.
         # ※ KRX(data.krx.co.kr)가 네트워크에서 차단된 환경에서는 항상 None → value 렌즈 비어 있음.
+        if self._market == "US":
+            # US 종목은 KRX 밸류에이션 불가 — ~150 종목분 실패 라운드트립 방지.
+            # _valuation_map(None) → {} 로 처리됨.
+            return None
         from pykrx import stock
 
         try:

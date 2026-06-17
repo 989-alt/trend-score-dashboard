@@ -68,4 +68,27 @@ def build_kr_universe(top_n: int, cache_dir: Path) -> list[str]:
         return []
 
 
-__all__ = ["build_kr_universe", "top_by_turnover"]
+# fmt: off
+# Static large-cap US universe (~150 tickers, S&P 500 market-cap order, yfinance-compatible).
+# SURVIVORSHIP BIAS WARNING: current survivors only — companies delisted since 2016 are absent.
+# Some recent listings (post-2016 IPOs) may lack full history and will be dropped fail-open.
+US_UNIVERSE: list[str] = [
+    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "GOOG", "META", "BRK-B", "LLY", "AVGO",
+    "TSLA", "JPM", "WMT", "V", "UNH", "XOM", "MA", "PG", "JNJ", "HD",
+    "COST", "ORCL", "ABBV", "BAC", "KO", "MRK", "CVX", "NFLX", "AMD", "PEP",
+    "CRM", "TMO", "ADBE", "LIN", "MCD", "CSCO", "ACN", "WFC", "ABT", "DHR",
+    "GE", "TXN", "QCOM", "AMGN", "PM", "DIS", "INTU", "CAT", "IBM", "VZ",
+    "CMCSA", "NOW", "UNP", "GS", "SPGI", "MS", "RTX", "PFE", "NEE", "HON",
+    "LOW", "AXP", "ISRG", "BKNG", "T", "ELV", "PGR", "TJX", "SYK", "VRTX",
+    "LMT", "REGN", "BSX", "MDT", "C", "BLK", "CB", "ADP", "MMC", "AMAT",
+    "PLD", "ETN", "CI", "DE", "ADI", "GILD", "BMY", "MU", "SBUX", "LRCX",
+    "KLAC", "SCHW", "BX", "MO", "SO", "DUK", "ZTS", "ICE", "TGT", "BDX",
+    "EOG", "SLB", "AON", "APH", "CME", "WM", "CL", "ITW", "MCK", "PH",
+    "NKE", "GD", "USB", "MMM", "EMR", "CSX", "FCX", "NOC", "MAR", "PNC",
+    "ORLY", "CDNS", "MSI", "COF", "SNPS", "ECL", "APD", "EW", "ROP", "AJG",
+    "MCO", "DXCM", "HCA", "KMB", "F", "GM", "TT", "PSA", "TFC", "NSC",
+    "AEP", "CARR", "ROST", "OXY", "D", "WELL", "SRE", "PCAR", "KMI", "STZ",
+]
+# fmt: on
+
+__all__ = ["US_UNIVERSE", "build_kr_universe", "top_by_turnover"]
