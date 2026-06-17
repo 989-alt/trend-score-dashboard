@@ -12,6 +12,7 @@ from decimal import Decimal
 
 from backend import scoring as sc
 from backend.backtest import metrics
+from backend.backtest.metrics import _spearman_stat
 from backend.backtest.panel import Panel
 from backend.config import Settings, get_settings
 from backend.factors import build_candidate
@@ -237,13 +238,6 @@ def _mae(panel: Panel, ticker: str, t: date, horizon: int) -> Decimal | None:
         return None
     entry = future[0].close
     return metrics.max_adverse_excursion(entry, [r.low for r in future[1 : horizon + 1]])
-
-
-# stat_fn 헬퍼 — (score, fwd) 튜플 리스트 → pooled Spearman
-def _spearman_stat(records: list[tuple[Decimal, Decimal]]) -> Decimal:
-    s = [r[0] for r in records]
-    f = [r[1] for r in records]
-    return metrics.spearman_monotonicity(s, f)
 
 
 # stat_fn 헬퍼 — Decimal 리스트 → 평균 MAE

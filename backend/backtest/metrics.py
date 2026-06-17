@@ -42,6 +42,16 @@ def spearman_monotonicity(scores: list[Decimal], forward_returns: list[Decimal])
     return (cov / denom).quantize(Decimal("0.0001"))
 
 
+def _spearman_stat(records: list[tuple[Decimal, Decimal]]) -> Decimal:
+    """stat_fn 헬퍼 — (score, fwd) 튜플 리스트 → pooled Spearman 단조성.
+
+    block_bootstrap_ci 등의 stat_fn 콜백으로 쓰인다(run.py·horserace.py 공용 단일 출처).
+    """
+    s = [r[0] for r in records]
+    f = [r[1] for r in records]
+    return spearman_monotonicity(s, f)
+
+
 def max_adverse_excursion(entry: Decimal, path: list[Decimal]) -> Decimal:
     """매수후 최대역행 = min((p−entry)/entry). path 비었거나 entry≤0 이면 0."""
     if entry <= 0 or not path:
@@ -262,6 +272,7 @@ def bh_fdr_reject(pvalues: list[Decimal], *, q: Decimal) -> list[bool]:
 
 
 __all__ = [
+    "_spearman_stat",
     "annualized_volatility",
     "bh_fdr_reject",
     "block_bootstrap_ci",

@@ -232,7 +232,7 @@ def _q4(v: Decimal) -> str:
 def render_horserace_markdown(lb: Leaderboard) -> str:
     """팩터 호스레이스 리더보드 → 마크다운(사람용).
 
-    헤더 + 표(factor | mono | CI [lo, hi] | p | FDR | holdout | winner), lb 순서 1행/팩터.
+    헤더 + 표(factor | mono | CI [lo, hi] | p | FDR | holdout | n | winner), lb 순서 1행/팩터.
     """
     lines = [
         "# 팩터 호스레이스 리더보드",
@@ -241,8 +241,8 @@ def render_horserace_markdown(lb: Leaderboard) -> str:
         "- winner = FDR 기각 AND OOS CI_lo>0 AND 홀드아웃 단조성>0",
         "  (유의한 양의 OOS 단조성 + 홀드아웃 재확인)",
         "",
-        "| factor | mono | CI [lo, hi] | p | FDR | holdout | winner |",
-        "|---|---|---|---|---|---|---|",
+        "| factor | mono | CI [lo, hi] | p | FDR | holdout | n | winner |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for r in lb.results:
         ci = f"[{_q4(r.ci_lo)}, {_q4(r.ci_hi)}]"
@@ -250,7 +250,7 @@ def render_horserace_markdown(lb: Leaderboard) -> str:
         win = "winner" if r.winner else "—"
         lines.append(
             f"| {r.name} | {_q4(r.mono)} | {ci} | {_q4(r.pvalue)}"
-            f" | {fdr} | {_q4(r.holdout_mono)} | {win} |"
+            f" | {fdr} | {_q4(r.holdout_mono)} | {r.n} | {win} |"
         )
     lines += [
         "",

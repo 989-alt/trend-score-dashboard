@@ -19,11 +19,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal
 
 from backend.backtest.metrics import (
+    _spearman_stat,
     bh_fdr_reject,
     block_bootstrap_ci,
     permutation_pvalue,
@@ -35,7 +36,6 @@ from backend.backtest.run import (
     WalkForwardConfig,
     _fwd_return,
     _rebalance_dates,
-    _spearman_stat,
     _walk_forward_splits,
 )
 
@@ -176,19 +176,7 @@ def run_horserace(
     finalized: list[FactorResult] = []
     for r, reject in zip(results, rejects, strict=True):
         winner = reject and r.ci_lo > Decimal("0") and r.holdout_mono > Decimal("0")
-        finalized.append(
-            FactorResult(
-                name=r.name,
-                mono=r.mono,
-                ci_lo=r.ci_lo,
-                ci_hi=r.ci_hi,
-                pvalue=r.pvalue,
-                fdr_reject=reject,
-                holdout_mono=r.holdout_mono,
-                winner=winner,
-                n=r.n,
-            )
-        )
+        finalized.append(replace(r, fdr_reject=reject, winner=winner))
 
     # 정렬: 승자 우선, 그다음 mono 내림차순.
     finalized.sort(key=lambda r: (not r.winner, -r.mono))
