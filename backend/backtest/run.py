@@ -185,7 +185,7 @@ def _score_at(
                 settings=settings,
             )
         )
-        if preset == "entry_bias":
+        if preset in ("entry_bias", "fallback_c"):
             rows_by_ticker[ticker] = rows
     eligible = [c for c in cands if c.eligible]
     scored = sc.score_candidates(eligible, settings)
@@ -219,6 +219,27 @@ def _score_at(
             entry_score = max(Decimal("0"), min(Decimal("1"), entry)) * guard
             new_scores[tk] = entry_score
         base = new_scores
+    elif preset == "fallback_c":
+        # 레이어1 진입품질 재가중: near_52w 가중치 = weight_52w_fallback(w),
+        # pullback = (0.30 - w) 자유배분, × extension_guard. (entry_bias 강화·파라미터판)
+        w52 = settings.weight_52w_fallback
+        w_pull = Decimal("0.30") - w52
+        fc_scores: dict[str, Decimal] = {}
+        for tk, (_sv, bd) in scored.items():
+            rows_tk = rows_by_ticker.get(tk, [])
+            pullback = sc.compute_pullback_3pos(rows_tk, settings) if rows_tk else Decimal("0")
+            guard = sc.compute_extension_guard(rows_tk, settings) if rows_tk else Decimal("1")
+            entry = (
+                bd.near_52w * w52
+                + pullback * w_pull
+                + bd.pocket_pivot * settings.weight_pocket_pivot
+                + bd.momentum_norm * settings.weight_momentum
+                + bd.rs_norm * settings.weight_rs
+                + bd.turnover_norm * settings.weight_turnover
+                + bd.vol_fit * settings.weight_vol_fit
+            )
+            fc_scores[tk] = max(Decimal("0"), min(Decimal("1"), entry)) * guard
+        base = fc_scores
     elif preset == "alpha_composite":
         if not alpha_factors:
             raise ValueError(
@@ -604,7 +625,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--preset",
         default="baseline",
-        choices=["baseline", "quality_tilt", "entry_bias", "alpha_composite"],
+        choices=["baseline", "quality_tilt", "entry_bias", "alpha_composite", "fallback_c"],
     )
     p.add_argument("--tickers", default="", help="콤마구분 6자리 코드. 비우면 유니버스 자동(느림)")
     p.add_argument("--out", default="data/backtest")
