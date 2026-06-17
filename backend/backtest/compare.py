@@ -19,6 +19,7 @@ compare_presets(panel, cfg, wf, variant_preset, baseline_preset="baseline")
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -38,8 +39,6 @@ from backend.backtest.run import (
 from backend.config import Settings, get_settings
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
     from backend.backtest.horserace import FactorFn
 
 
@@ -107,6 +106,9 @@ def _collect_groups(
     MAE: top_n 픽 기준 — 두 프리셋이 다른 순위를 매기면 서로 다른 종목을 상위에
     올리게 되고, 그 종목들의 평균 MAE 가 달라진다. ALL tickers 를 쓰면
     eligible set 이 동일하므로 ΔMAE = 0 이 된다.
+
+    alpha_factors: preset=="alpha_composite" 일 때 _score_at 로 전달(승자 팩터).
+                   baseline 호출에는 넘기지 않는다(None).
     """
     mono_groups: dict[int, list[list[tuple[Decimal, Decimal]]]] = {h: [] for h in horizons}
     mae_groups: dict[int, list[list[Decimal]]] = {h: [] for h in horizons}
@@ -170,6 +172,9 @@ def compare_presets(
     게이트:
       Δmono > 0 AND dmono_ci_lo > 0  (단조성 개선 + CI 가 0 제외)
       ΔMAE  > 0 AND dmae_ci_lo  > 0  (MAE 개선   + CI 가 0 제외)
+
+    alpha_factors: variant 가 alpha_composite 인 경우에만 variant 채점에 전달.
+                   baseline 채점에는 절대 전달하지 않는다(공정 비교).
     """
     settings = get_settings()
     horizons = cfg.forward_horizons
@@ -213,6 +218,7 @@ def compare_presets(
     var_mono_groups, var_mae_groups = _collect_groups(
         panel, oos_dates, settings, cfg, variant_preset, horizons, alpha_factors=alpha_factors
     )
+    # baseline 은 alpha_factors 미전달(고정 None) — 변형만 팩터로 채점해야 공정 비교.
     base_mono_groups, base_mae_groups = _collect_groups(
         panel, oos_dates, settings, cfg, baseline_preset, horizons
     )
