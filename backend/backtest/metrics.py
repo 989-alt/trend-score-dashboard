@@ -271,6 +271,24 @@ def bh_fdr_reject(pvalues: list[Decimal], *, q: Decimal) -> list[bool]:
     return reject
 
 
+def portfolio_metrics(
+    nav: list[Decimal], period_returns: list[Decimal], *, periods_per_year: int
+) -> dict[str, Decimal]:
+    """NAV·구간수익 → {mdd, cagr, sharpe, calmar}. 모두 Decimal. 표본 부족시 0."""
+    mdd = max_drawdown(nav)
+    n = len(period_returns)
+    if n < 2 or not nav:
+        return {"mdd": mdd, "cagr": Decimal("0"), "sharpe": Decimal("0"), "calmar": Decimal("0")}
+    years = Decimal(n) / Decimal(periods_per_year)
+    cg = cagr(nav[0], nav[-1], years=years)
+    mean = sum(period_returns, Decimal("0")) / Decimal(n)
+    vol = annualized_volatility(period_returns, periods_per_year)
+    ann_mean = mean * Decimal(periods_per_year)
+    sharpe = ann_mean / vol if vol > 0 else Decimal("0")
+    calmar = cg / abs(mdd) if mdd < 0 else Decimal("0")
+    return {"mdd": mdd, "cagr": cg, "sharpe": sharpe, "calmar": calmar}
+
+
 __all__ = [
     "_spearman_stat",
     "annualized_volatility",
@@ -282,6 +300,7 @@ __all__ = [
     "paired_diff_ci",
     "percentile",
     "permutation_pvalue",
+    "portfolio_metrics",
     "spearman_monotonicity",
     "win_rate",
 ]
