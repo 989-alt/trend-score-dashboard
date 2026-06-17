@@ -20,7 +20,6 @@ from backend.backtest.compare import compare_presets
 from backend.backtest.run import BacktestConfig, WalkForwardConfig
 from backend.schemas import OHLCVRow
 
-
 # ---------------------------------------------------------------------------
 # 헬퍼 — test_entry_bias.py 의 _make_entry_bias_sanity_panel 재사용 패턴
 # ---------------------------------------------------------------------------
@@ -280,9 +279,7 @@ def test_compare_structured_entry_bias_dmono_positive() -> None:
 
     hc = result.horizons[20]
     if hc.n == 0:
-        pytest.skip(
-            f"관찰 수 0 — 패널 설계 확인 필요 (n_trailing={n_trailing}, t={t})"
-        )
+        pytest.skip(f"관찰 수 0 — 패널 설계 확인 필요 (n_trailing={n_trailing}, t={t})")
 
     # 포인트 추정치: entry_bias 가 baseline 보다 단조성이 높아야 함
     assert hc.dmono > Decimal("0"), (

@@ -78,6 +78,12 @@ class DartClient:
             self._corp_map = self._load_corp_map()
         return self._corp_map.get(ticker)
 
+    def all_listed_codes(self) -> list[str]:
+        """corpCode.xml 의 6자리 종목코드 전체(상장사 근사). 캐시 재사용."""
+        if self._corp_map is None:
+            self._corp_map = self._load_corp_map()
+        return sorted(self._corp_map.keys())
+
     def _load_corp_map(self) -> dict[str, str]:
         r = self._http.get(f"{_BASE}/corpCode.xml", params={"crtfc_key": self._key})
         r.raise_for_status()

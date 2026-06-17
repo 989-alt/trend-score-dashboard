@@ -56,3 +56,13 @@ def test_ratios_for_filing_parses_period(monkeypatch) -> None:
     assert out["roe"] == Decimal("0.1")
     # 정기보고서 아님 → 빈 dict(fail-open)
     assert client.ratios_for_filing("X", {"report_nm": "주요사항보고서"}) == {}
+
+
+def test_all_listed_codes_returns_six_digit_codes(monkeypatch) -> None:
+    from backend.backtest.dart_client import DartClient
+
+    c = DartClient("k")
+    monkeypatch.setattr(c, "_load_corp_map", lambda: {"005930": "00126380", "000660": "00164779"})
+    c._corp_map = None
+    codes = c.all_listed_codes()
+    assert "005930" in codes and all(len(x) == 6 for x in codes)
