@@ -7,13 +7,20 @@
 
 ## ▶ RESUME HERE — 다른 기기(KRX 가능 머신)에서 시작
 
-1. **이 PC에서 `git push` 완료됨**(아래 §8 확인). 다른 기기:
+**"클론만 하면 되나?" → 클론 + 3가지:**
+| 클론으로 오는 것 ✅ | 클론에 **없는** 것 (추가 필요) |
+|---|---|
+| 코드·스펙·구현계획·이 `HANDOFF.md` | ① **uv + `uv sync`**(Python 3.13 환경) |
+| 검증 인프라·테스트·entry_bias·compare 게이트 | ② **`.env` 시크릿**(gitignore — repo에 없음) |
+| 브랜치 `feat/validation-oos-entry-bias` | ③ (선택) F: 연구문서 — 배경용, 실행엔 불필요 |
+
+1. **이 PC에서 `git push` 완료됨**(아래 §8). 다른 기기:
    ```
    git clone https://github.com/989-alt/trend-score-dashboard.git
    cd trend-score-dashboard && git checkout feat/validation-oos-entry-bias
    ```
 2. 환경: **uv 설치**(`winget install astral-sh.uv` 또는 `irm https://astral.sh/uv/install.ps1 | iex`) → `uv sync`(Python 3.13). 검증 `uv run pytest -q` → **321 passed, 1 skipped** 이면 정상.
-3. 시크릿(`.env`, gitignore — 새 기기서 직접 입력): `DART_API_KEY`(필수), **KRX 머신이면 `KRX_ID`/`KRX_PW`**(이 PC선 네트워크 차단으로 무용이었으나 KRX 머신선 가치 렌즈 부활에 사용). 백테스트 `main()`은 `DART_API_KEY`를 **OS 환경변수**로 읽음.
+3. **시크릿 `.env` — 사용자가 프로젝트 루트에 직접 배치**(gitignore라 repo에 없음·커밋 안 됨): `DART_API_KEY`(필수), **KRX 머신이면 `KRX_ID`/`KRX_PW`**(이 PC선 네트워크 차단으로 무용, KRX 머신선 가치렌즈 부활에 사용). 백테스트 `main()`은 `DART_API_KEY`를 **OS 환경변수**로 읽음(`.env`도 pydantic 로드).
 4. 레포 밖 연구문서(별도 전송, git에 없음): **`F:\바이브코딩\trend-score-research\`** (`STRATEGY_REFERENCE.md`=팩터 메뉴, `PROGRESS_AND_ROADMAP.md`, `matdongsan_report.md`, `quantlab_js/`).
 5. **현재 위치 한 줄:** 검증 인프라(Layer A/B/C+게이트) 완성·리뷰 완료. entry_bias 수정안은 **실데이터 엄격게이트 FAIL**(단조성 무개선; extension_guard만 5d MAE 유의 축소). 다음 방향=**선택 알파 발견 엔진**(스펙+계획 작성 완료) → §4.
 
