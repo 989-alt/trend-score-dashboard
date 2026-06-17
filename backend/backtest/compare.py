@@ -163,6 +163,7 @@ def compare_presets(
     baseline_preset: str = "baseline",
     *,
     alpha_factors: Mapping[str, FactorFn] | None = None,
+    settings: Settings | None = None,
 ) -> ComparisonResult:
     """OOS dates 에서 variant vs baseline 을 페어드 비교한다.
 
@@ -175,8 +176,10 @@ def compare_presets(
 
     alpha_factors: variant 가 alpha_composite 인 경우에만 variant 채점에 전달.
                    baseline 채점에는 절대 전달하지 않는다(공정 비교).
+    settings: 외부에서 주입할 Settings 인스턴스. None 이면 get_settings() 로 로드.
+              ablation 등에서 weight_52w_fallback 등을 오버라이드할 때 사용.
     """
-    settings = get_settings()
+    settings = settings if settings is not None else get_settings()
     horizons = cfg.forward_horizons
 
     dates = _rebalance_dates(panel, cfg)

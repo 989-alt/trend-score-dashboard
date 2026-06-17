@@ -10,8 +10,12 @@ from tests.fixtures.backtest_synth import make_panel
 def test_fallback_c_compare_runs_and_reports_dmae() -> None:
     panel = make_panel()
     cfg = BacktestConfig(
-        start=panel.index_rows[0].date, end=panel.index_rows[-1].date,
-        rebalance="weekly", top_n=2, n_resamples=50, n_perms=50,
+        start=panel.index_rows[0].date,
+        end=panel.index_rows[-1].date,
+        rebalance="weekly",
+        top_n=2,
+        n_resamples=50,
+        n_perms=50,
     )
     wf = WalkForwardConfig(n_folds=2, holdout_frac=Decimal("0.2"))
     result = compare_presets(panel, cfg, wf, variant_preset="fallback_c")
