@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from backend.backtest import metrics
 from backend.backtest.panel import Panel
@@ -36,6 +36,11 @@ from backend.backtest.run import (
     _walk_forward_splits,
 )
 from backend.config import Settings, get_settings
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from backend.backtest.horserace import FactorFn
 
 
 @dataclass(frozen=True)
@@ -84,6 +89,8 @@ def _collect_groups(
     cfg: BacktestConfig,
     preset: str,
     horizons: tuple[int, ...],
+    *,
+    alpha_factors: Mapping[str, FactorFn] | None = None,
 ) -> tuple[
     dict[int, list[list[tuple[Decimal, Decimal]]]],
     dict[int, list[list[Decimal]]],
@@ -106,7 +113,7 @@ def _collect_groups(
     top_n = cfg.top_n
 
     for t in dates:
-        ranked = _score_at(panel, t, settings, preset)
+        ranked = _score_at(panel, t, settings, preset, alpha_factors=alpha_factors)
         top_picks = [tk for tk, _ in ranked[:top_n]]
 
         date_mono: dict[int, list[tuple[Decimal, Decimal]]] = {h: [] for h in horizons}
@@ -152,6 +159,8 @@ def compare_presets(
     wf: WalkForwardConfig,
     variant_preset: str,
     baseline_preset: str = "baseline",
+    *,
+    alpha_factors: Mapping[str, FactorFn] | None = None,
 ) -> ComparisonResult:
     """OOS dates 에서 variant vs baseline 을 페어드 비교한다.
 
@@ -202,7 +211,7 @@ def compare_presets(
         )
 
     var_mono_groups, var_mae_groups = _collect_groups(
-        panel, oos_dates, settings, cfg, variant_preset, horizons
+        panel, oos_dates, settings, cfg, variant_preset, horizons, alpha_factors=alpha_factors
     )
     base_mono_groups, base_mae_groups = _collect_groups(
         panel, oos_dates, settings, cfg, baseline_preset, horizons
