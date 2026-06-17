@@ -181,6 +181,11 @@ def permutation_pvalue(
       p = (count(|null_stat| >= |observed|) + 1) / (n_perms + 1)
 
     +1 분자/분모 → 보수적(conservative), 절대로 0 이 되지 않음.
+
+    ⚠ 가정: 각 날짜 그룹은 이벤트 ≥ 2 개. 1-이벤트 날짜는 셔플이 무효과라 그 (score,fwd)
+    쌍이 모든 퍼뮤테이션에서 고정 → 귀무분포를 좁혀 p 를 과소추정(anti-conservative)함.
+    실거래 유니버스(날짜당 수십 종목)에선 비발생하나, 얇은 유니버스/초기 구간에선 p 를
+    낙관적으로 볼 것. (호출자가 그룹 크기를 보장; 매 호출 경고는 경고피로라 두지 않음.)
     """
     rng = random.Random(seed)
     abs_obs = abs(observed)

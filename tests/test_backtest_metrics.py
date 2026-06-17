@@ -166,6 +166,34 @@ def test_block_bootstrap_ci_noise_straddles_zero() -> None:
     assert hi > lo
 
 
+def _make_partial_signal_groups(
+    n_dates: int = 30, n_per_date: int = 10, seed: int = 123
+) -> list[list[tuple[Decimal, Decimal]]]:
+    """중간 강도 양의 단조성: score 와 양의 상관이나 정수 노이즈로 완벽하지 않음.
+
+    완벽 신호(= lo==hi==1.0 의 퇴화 점-CI)와 달리 부트스트랩 CI 가 '실구간'이 되어,
+    퍼센타일 방향(lo↔hi) 뒤바뀜·off-by-one 버그까지 잡을 수 있는 테스트.
+    """
+    rng = _rnd.Random(seed)
+    groups: list[list[tuple[Decimal, Decimal]]] = []
+    for _ in range(n_dates):
+        records = [
+            (Decimal(k + 1), (Decimal(k + 1) + Decimal(rng.randint(-3, 3))) / Decimal("10"))
+            for k in range(n_per_date)
+        ]
+        groups.append(records)
+    return groups
+
+
+def test_block_bootstrap_ci_partial_signal_is_bounded_interval() -> None:
+    """중간 신호 → CI 가 0 < lo < hi < 1 인 '실구간'(퇴화 점-CI 아님). 퍼센타일 방향 가드."""
+    groups = _make_partial_signal_groups(n_dates=30, n_per_date=10, seed=123)
+    lo, hi = block_bootstrap_ci(groups, _spearman_stat, n_resamples=300, seed=42)
+    assert lo < hi, f"CI 는 실구간이어야 함(퇴화 점-CI 아님): lo={lo}, hi={hi}"
+    assert lo > Decimal("0"), f"중간 양의 신호이므로 lo>0 이어야: lo={lo}, hi={hi}"
+    assert hi < Decimal("1"), f"완벽상관 아니므로 hi<1 이어야: lo={lo}, hi={hi}"
+
+
 def test_block_bootstrap_ci_determinism() -> None:
     """동일 seed → 동일 결과."""
     groups = _make_signal_groups()
