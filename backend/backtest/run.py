@@ -58,6 +58,42 @@ class BacktestResult:
     turnover_count: int
 
 
+@dataclass(frozen=True)
+class WalkForwardConfig:
+    """앵커드(확장형) 워크포워드 설정 (Layer C).
+
+    n_folds       = 비홀드아웃 구간을 나눌 테스트 폴드 수.
+    holdout_frac  = 마지막에 떼어 둘 최종 홀드아웃 비율(∈[0,1)).
+    scheme        = "anchored"(=expanding) 만 지원(v1). 향후 rolling 훅.
+    """
+
+    n_folds: int = 4
+    holdout_frac: Decimal = Decimal("0.2")
+    scheme: str = "anchored"
+
+
+@dataclass(frozen=True)
+class WalkForwardResult:
+    """워크포워드 결과 — in-sample(전체) vs OOS(테스트 폴드 합집합) vs 홀드아웃.
+
+    per_fold      = 폴드별 테스트구간 이벤트스터디(폴드 i 의 TEST dates).
+    oos           = 모든 테스트 폴드 dates 합집합의 이벤트스터디(가장 중요한 지표).
+    holdout       = 최종 홀드아웃 dates 의 이벤트스터디(단 1회 소진).
+    in_sample     = 전체 dates 의 이벤트스터디(= run_backtest.event_study 와 동일).
+    fold_ranges   = 폴드별 (train_dates, test_dates). train 은 anchored prefix(v1 미피팅).
+    oos_dates / holdout_dates / in_sample_dates = 각 구간의 리밸런스 날짜들.
+    """
+
+    per_fold: list[dict[int, EventStudyBucket]]
+    oos: dict[int, EventStudyBucket]
+    holdout: dict[int, EventStudyBucket]
+    in_sample: dict[int, EventStudyBucket]
+    fold_ranges: list[tuple[list[date], list[date]]]
+    oos_dates: list[date]
+    holdout_dates: list[date]
+    in_sample_dates: list[date]
+
+
 def _rebalance_dates(panel: Panel, cfg: BacktestConfig) -> list[date]:
     trading = sorted(
         {r.date for s in panel.series.values() for r in s.rows if cfg.start <= r.date <= cfg.end}
@@ -166,14 +202,36 @@ def _mae(panel: Panel, ticker: str, t: date, horizon: int) -> Decimal | None:
     return metrics.max_adverse_excursion(entry, [r.low for r in future[1 : horizon + 1]])
 
 
-def run_backtest(panel: Panel, cfg: BacktestConfig) -> BacktestResult:
-    settings = get_settings()
-    dates = _rebalance_dates(panel, cfg)
-    nav = [Decimal("1")]
-    benchmark_nav: list[Decimal] = [Decimal("1")]
-    held: set[str] = set()
-    turnover_count = 0
-    # 풀링된 포인트 추정치용 (기존 코드와 동일)
+# stat_fn 헬퍼 — (score, fwd) 튜플 리스트 → pooled Spearman
+def _spearman_stat(records: list[tuple[Decimal, Decimal]]) -> Decimal:
+    s = [r[0] for r in records]
+    f = [r[1] for r in records]
+    return metrics.spearman_monotonicity(s, f)
+
+
+# stat_fn 헬퍼 — Decimal 리스트 → 평균 MAE
+def _mean_stat(values: list[Decimal]) -> Decimal:
+    if not values:
+        return Decimal("0")
+    return sum(values, Decimal("0")) / Decimal(len(values))
+
+
+def build_event_study(
+    panel: Panel,
+    dates: list[date],
+    settings: Settings,
+    cfg: BacktestConfig,
+) -> dict[int, EventStudyBucket]:
+    """순수 헬퍼 — 주어진 리밸런스 dates 에 대한 호라이즌별 이벤트스터디 버킷.
+
+    run_backtest 의 포인트 추정치(풀링 Spearman·평균 MAE·승률·N) + Layer-B 유의성
+    (날짜-블록 부트스트랩 CI·퍼뮤테이션 p)을 동일 연산으로 계산한다. dates 부분집합을
+    넘기면 그 구간만의 OOS/홀드아웃/폴드 이벤트스터디가 된다(룩어헤드 0 — `_score_at`
+    과 `_fwd_return` 둘 다 ≤T 슬라이스·T 이후 가격만 사용).
+
+    포트폴리오 시뮬과 독립이므로 run_backtest 의 NAV 부분과 분리해도 수치 불변.
+    """
+    # 풀링된 포인트 추정치용
     es_scores: dict[int, list[Decimal]] = {h: [] for h in cfg.forward_horizons}
     es_fwd: dict[int, list[Decimal]] = {h: [] for h in cfg.forward_horizons}
     es_mae: dict[int, list[Decimal]] = {h: [] for h in cfg.forward_horizons}
@@ -185,24 +243,16 @@ def run_backtest(panel: Panel, cfg: BacktestConfig) -> BacktestResult:
     # mae_groups[h] = list over dates of [maes_at_date]
     mae_groups: dict[int, list[list[Decimal]]] = {h: [] for h in cfg.forward_horizons}
 
-    fs_vals: dict[str, dict[int, list[Decimal]]] = {
-        f: {h: [] for h in cfg.forward_horizons} for f in _STUDY_FACTORS
-    }
-    fs_fwd: dict[str, dict[int, list[Decimal]]] = {
-        f: {h: [] for h in cfg.forward_horizons} for f in _STUDY_FACTORS
-    }
-
-    for i, t in enumerate(dates):
+    for t in dates:
         ranked = _score_at(panel, t, settings, cfg.preset)
-        picks = [tk for tk, _ in ranked[: cfg.top_n]]
         # 날짜별 임시 버킷
         date_scores: dict[int, list[Decimal]] = {h: [] for h in cfg.forward_horizons}
         date_fwds: dict[int, list[Decimal]] = {h: [] for h in cfg.forward_horizons}
         date_maes: dict[int, list[Decimal]] = {h: [] for h in cfg.forward_horizons}
-        for tk, sv in ranked:
+        for _tk, sv in ranked:
             for h in cfg.forward_horizons:
-                fr = _fwd_return(panel, tk, t, h)
-                mae = _mae(panel, tk, t, h)
+                fr = _fwd_return(panel, _tk, t, h)
+                mae = _mae(panel, _tk, t, h)
                 if fr is not None and mae is not None:
                     es_scores[h].append(sv)
                     es_fwd[h].append(fr)
@@ -210,61 +260,11 @@ def run_backtest(panel: Panel, cfg: BacktestConfig) -> BacktestResult:
                     date_scores[h].append(sv)
                     date_fwds[h].append(fr)
                     date_maes[h].append(mae)
-            fund = panel.fundamentals_asof(tk, t)
-            val = panel.valuation_asof(tk, t)
-            factor_vals: dict[str, Decimal | None] = {
-                "roe": fund.roe if fund else None,
-                "op_margin": fund.op_margin if fund else None,
-                "rev_growth": fund.rev_growth if fund else None,
-                "per": val.per if val else None,
-                "pbr": val.pbr if val else None,
-            }
-            for h in cfg.forward_horizons:
-                fr = _fwd_return(panel, tk, t, h)
-                if fr is None:
-                    continue
-                for fname, fval in factor_vals.items():
-                    if fval is not None:
-                        fs_vals[fname][h].append(fval)
-                        fs_fwd[fname][h].append(fr)
         # 날짜 그룹 추가 (비어있으면 추가 안 함)
         for h in cfg.forward_horizons:
             if date_scores[h]:
                 es_groups[h].append((date_scores[h], date_fwds[h]))
                 mae_groups[h].append(date_maes[h])
-        if i + 1 < len(dates) and picks:
-            nxt = dates[i + 1]
-            rets: list[Decimal] = []
-            for tk in picks:
-                a = panel.price_on_or_after(tk, t + timedelta(days=1))
-                b = panel.price_on_or_after(tk, nxt + timedelta(days=1))
-                if a and b and a > 0:
-                    rets.append((b - a) / a)
-            if rets:
-                gross = sum(rets, Decimal("0")) / Decimal(len(rets))
-                churn = len(set(picks) ^ held)
-                cost = (cfg.cost_bps / Decimal("10000")) * (
-                    Decimal(churn) / Decimal(max(len(picks), 1))
-                )
-                nav.append(nav[-1] * (Decimal("1") + gross - cost))
-                turnover_count += churn
-                held = set(picks)
-                ia = _index_price_on_or_after(panel, t + timedelta(days=1))
-                ib = _index_price_on_or_after(panel, nxt + timedelta(days=1))
-                bench_ret = (ib / ia - Decimal("1")) if (ia and ib and ia > 0) else Decimal("0")
-                benchmark_nav.append(benchmark_nav[-1] * (Decimal("1") + bench_ret))
-
-    # stat_fn 헬퍼 — (score, fwd) 튜플 리스트 → pooled Spearman
-    def _spearman_stat(records: list[tuple[Decimal, Decimal]]) -> Decimal:
-        s = [r[0] for r in records]
-        f = [r[1] for r in records]
-        return metrics.spearman_monotonicity(s, f)
-
-    # stat_fn 헬퍼 — Decimal 리스트 → 평균 MAE
-    def _mean_stat(values: list[Decimal]) -> Decimal:
-        if not values:
-            return Decimal("0")
-        return sum(values, Decimal("0")) / Decimal(len(values))
 
     event_study: dict[int, EventStudyBucket] = {}
     for h in cfg.forward_horizons:
@@ -314,6 +314,69 @@ def run_backtest(panel: Panel, cfg: BacktestConfig) -> BacktestResult:
             mae_ci_lo=mae_ci_lo,
             mae_ci_hi=mae_ci_hi,
         )
+    return event_study
+
+
+def run_backtest(panel: Panel, cfg: BacktestConfig) -> BacktestResult:
+    settings = get_settings()
+    dates = _rebalance_dates(panel, cfg)
+    nav = [Decimal("1")]
+    benchmark_nav: list[Decimal] = [Decimal("1")]
+    held: set[str] = set()
+    turnover_count = 0
+
+    fs_vals: dict[str, dict[int, list[Decimal]]] = {
+        f: {h: [] for h in cfg.forward_horizons} for f in _STUDY_FACTORS
+    }
+    fs_fwd: dict[str, dict[int, list[Decimal]]] = {
+        f: {h: [] for h in cfg.forward_horizons} for f in _STUDY_FACTORS
+    }
+
+    for i, t in enumerate(dates):
+        ranked = _score_at(panel, t, settings, cfg.preset)
+        picks = [tk for tk, _ in ranked[: cfg.top_n]]
+        for tk, _sv in ranked:
+            fund = panel.fundamentals_asof(tk, t)
+            val = panel.valuation_asof(tk, t)
+            factor_vals: dict[str, Decimal | None] = {
+                "roe": fund.roe if fund else None,
+                "op_margin": fund.op_margin if fund else None,
+                "rev_growth": fund.rev_growth if fund else None,
+                "per": val.per if val else None,
+                "pbr": val.pbr if val else None,
+            }
+            for h in cfg.forward_horizons:
+                fr = _fwd_return(panel, tk, t, h)
+                if fr is None:
+                    continue
+                for fname, fval in factor_vals.items():
+                    if fval is not None:
+                        fs_vals[fname][h].append(fval)
+                        fs_fwd[fname][h].append(fr)
+        if i + 1 < len(dates) and picks:
+            nxt = dates[i + 1]
+            rets: list[Decimal] = []
+            for tk in picks:
+                a = panel.price_on_or_after(tk, t + timedelta(days=1))
+                b = panel.price_on_or_after(tk, nxt + timedelta(days=1))
+                if a and b and a > 0:
+                    rets.append((b - a) / a)
+            if rets:
+                gross = sum(rets, Decimal("0")) / Decimal(len(rets))
+                churn = len(set(picks) ^ held)
+                cost = (cfg.cost_bps / Decimal("10000")) * (
+                    Decimal(churn) / Decimal(max(len(picks), 1))
+                )
+                nav.append(nav[-1] * (Decimal("1") + gross - cost))
+                turnover_count += churn
+                held = set(picks)
+                ia = _index_price_on_or_after(panel, t + timedelta(days=1))
+                ib = _index_price_on_or_after(panel, nxt + timedelta(days=1))
+                bench_ret = (ib / ia - Decimal("1")) if (ia and ib and ia > 0) else Decimal("0")
+                benchmark_nav.append(benchmark_nav[-1] * (Decimal("1") + bench_ret))
+
+    # 이벤트스터디 — 전체 dates 의 풀링/유의성(포트폴리오 시뮬과 독립, 수치 불변)
+    event_study = build_event_study(panel, dates, settings, cfg)
     factor_study = {
         fname: {
             h: EventStudyBucket(
@@ -336,7 +399,83 @@ def run_backtest(panel: Panel, cfg: BacktestConfig) -> BacktestResult:
     )
 
 
-__all__ = ["BacktestConfig", "BacktestResult", "EventStudyBucket", "run_backtest"]
+def _walk_forward_splits(
+    dates: list[date], wf: WalkForwardConfig
+) -> tuple[list[tuple[list[date], list[date]]], list[date]]:
+    """앵커드 폴드 분할 + 최종 홀드아웃 분리.
+
+    반환: (fold_ranges, holdout_dates)
+      fold_ranges[i] = (train_dates, test_dates)
+        - test_dates 는 비홀드아웃 구간을 n_folds 개로 나눈 i번째 연속 블록.
+        - train_dates 는 그 블록 직전까지의 prefix(anchored=expanding; v1 미피팅).
+        - 합집합(test) = 비홀드아웃 dates 전체(연속·비겹침·완전 커버).
+      holdout_dates = 마지막 holdout_frac 비율의 dates(단 1회 소진용).
+    """
+    n = len(dates)
+    holdout_n = int(n * float(wf.holdout_frac))  # truncate — 마지막 holdout_frac
+    pre = dates[: n - holdout_n]
+    holdout = dates[n - holdout_n :]
+    m = len(pre)
+    folds = max(wf.n_folds, 1)
+    bounds = [m * j // folds for j in range(folds + 1)]  # 0=bounds[0] … m=bounds[-1]
+    fold_ranges: list[tuple[list[date], list[date]]] = []
+    for i in range(folds):
+        lo, hi = bounds[i], bounds[i + 1]
+        train = pre[:lo]  # anchored prefix
+        test = pre[lo:hi]  # 다음 연속 블록
+        fold_ranges.append((train, test))
+    return fold_ranges, holdout
+
+
+def run_walk_forward(panel: Panel, cfg: BacktestConfig, wf: WalkForwardConfig) -> WalkForwardResult:
+    """앵커드(확장형) 워크포워드 OOS 평가 (Layer C).
+
+    절차:
+      1) 리밸런스 dates 산정(_rebalance_dates) — run_backtest 와 동일.
+      2) 마지막 holdout_frac 을 최종 홀드아웃으로 예약.
+      3) 나머지(pre-holdout)를 n_folds 개 앵커드 폴드로 분할:
+         fold i = train dates[0:split_i] · TEST dates[split_i:split_{i+1}]
+         (train 은 확장; test 는 다음 연속 블록). v1 은 피팅 없음 — "train" 은 본 prefix
+         일 뿐이며, T5(파라미터 피팅)에서 이 train 슬라이스를 사용할 훅이다.
+      4) 폴드별 TEST dates 로 build_event_study 호출 → per_fold.
+      5) OOS = 모든 테스트 폴드 dates 합집합으로 build_event_study(가장 중요한 지표).
+      6) holdout = 홀드아웃 dates 로 build_event_study(단 1회 소진).
+      7) in_sample = 전체 dates 로 build_event_study(= run_backtest.event_study).
+
+    룩어헤드 0: _score_at(≤T) + _fwd_return(T 이후 가격) 가 단일 가드 지점.
+    """
+    settings = get_settings()
+    dates = _rebalance_dates(panel, cfg)
+    fold_ranges, holdout_dates = _walk_forward_splits(dates, wf)
+
+    per_fold = [build_event_study(panel, test, settings, cfg) for _train, test in fold_ranges]
+    oos_dates = [t for _train, test in fold_ranges for t in test]
+    oos = build_event_study(panel, oos_dates, settings, cfg)
+    holdout = build_event_study(panel, holdout_dates, settings, cfg)
+    in_sample = build_event_study(panel, dates, settings, cfg)
+
+    return WalkForwardResult(
+        per_fold=per_fold,
+        oos=oos,
+        holdout=holdout,
+        in_sample=in_sample,
+        fold_ranges=fold_ranges,
+        oos_dates=oos_dates,
+        holdout_dates=holdout_dates,
+        in_sample_dates=dates,
+    )
+
+
+__all__ = [
+    "BacktestConfig",
+    "BacktestResult",
+    "EventStudyBucket",
+    "WalkForwardConfig",
+    "WalkForwardResult",
+    "build_event_study",
+    "run_backtest",
+    "run_walk_forward",
+]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -353,7 +492,12 @@ def main(argv: list[str] | None = None) -> int:
 
     from backend.backtest.dart_client import DartClient
     from backend.backtest.loader import PanelLoader
-    from backend.backtest.report import render_json, render_markdown
+    from backend.backtest.report import (
+        render_json,
+        render_markdown,
+        render_walk_forward_json,
+        render_walk_forward_markdown,
+    )
 
     p = argparse.ArgumentParser(description="KR 백테스트 검증 하니스 (오프라인)")
     p.add_argument("--start", required=True)
@@ -364,6 +508,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--preset", default="baseline", choices=["baseline", "quality_tilt"])
     p.add_argument("--tickers", default="", help="콤마구분 6자리 코드. 비우면 유니버스 자동(느림)")
     p.add_argument("--out", default="data/backtest")
+    # Layer C — OOS 앵커드 워크포워드
+    p.add_argument(
+        "--walk-forward",
+        action="store_true",
+        help="앵커드 워크포워드 실행(in-sample vs OOS vs 홀드아웃 리포트)",
+    )
+    p.add_argument("--n-folds", type=int, default=4, help="워크포워드 테스트 폴드 수")
+    p.add_argument("--holdout-frac", default="0.2", help="최종 홀드아웃 비율(0~1)")
     args = p.parse_args(argv)
 
     start = datetime.strptime(args.start, "%Y-%m-%d").date()
@@ -389,9 +541,20 @@ def main(argv: list[str] | None = None) -> int:
         cost_bps=Decimal(args.cost_bps),
         preset=args.preset,
     )
-    result = run_backtest(panel, cfg)
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
+    if args.walk_forward:
+        wf = WalkForwardConfig(n_folds=args.n_folds, holdout_frac=Decimal(args.holdout_frac))
+        wf_result = run_walk_forward(panel, cfg, wf)
+        wf_md = render_walk_forward_markdown(wf_result, cfg, wf)
+        (out_dir / f"report_walkforward_{args.preset}.md").write_text(wf_md, encoding="utf-8")
+        (out_dir / f"report_walkforward_{args.preset}.json").write_text(
+            json.dumps(render_walk_forward_json(wf_result, cfg, wf), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        print(wf_md)
+        return 0
+    result = run_backtest(panel, cfg)
     (out_dir / f"report_{args.preset}.md").write_text(
         render_markdown(result, cfg), encoding="utf-8"
     )
