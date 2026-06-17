@@ -36,14 +36,16 @@ def _pos(v: Any) -> Decimal | None:
 
 
 class PanelLoader:
-    def __init__(self, dart: DartClient | None, cache_dir: Path) -> None:
+    def __init__(self, dart: DartClient | None, cache_dir: Path, market: str = "KR") -> None:
         self._dart = dart
         self._cache_dir = cache_dir
+        self._market = market
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _fetch_ohlcv(self, ticker: str, start: date, end: date) -> Any:
-        """yfinance 로 KR 주가 OHLCV 조회 (네트워크). _ohlcv 캐시 래퍼가 호출한다.
-        .KS(KOSPI) 먼저, 빈 결과면 .KQ(KOSDAQ) fallback. 둘 다 빈/오류 → None.
+        """yfinance 로 주가 OHLCV 조회 (네트워크). _ohlcv 캐시 래퍼가 호출한다.
+        KR: .KS(KOSPI) 먼저, 빈 결과면 .KQ(KOSDAQ) fallback. 둘 다 빈/오류 → None.
+        US: suffix 없이 bare ticker(예: AAPL).
         """
         import yfinance as yf
 
@@ -60,10 +62,12 @@ class PanelLoader:
             except Exception:
                 return None
 
-        result = _fetch(".KS")
-        if result is None:
-            result = _fetch(".KQ")
-        return result
+        suffixes = (".KS", ".KQ") if self._market == "KR" else ("",)
+        for suffix in suffixes:
+            result = _fetch(suffix)
+            if result is not None:
+                return result
+        return None
 
     def _ohlcv(self, ticker: str, start: date, end: date) -> Any:
         """디스크 캐시 래퍼. HIT → 캐시 로드 반환. MISS → _fetch_ohlcv → 저장 → 반환.
@@ -78,7 +82,7 @@ class PanelLoader:
 
         cache_subdir = self._cache_dir / "ohlcv"
         cache_subdir.mkdir(parents=True, exist_ok=True)
-        key = f"{ticker}_{start.isoformat()}_{end.isoformat()}"
+        key = f"{self._market}_{ticker}_{start.isoformat()}_{end.isoformat()}"
         cache_path = cache_subdir / f"{key}.json"
 
         # --- 캐시 HIT 시도 ---
@@ -87,9 +91,10 @@ class PanelLoader:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
                     frame = pd.read_json(cache_path, orient="table")
-                # DatetimeIndex 복원 확인
+                # DatetimeIndex 복원 확인 — tz는 저장된 상태 그대로 유지(시장 중립).
+                # Asia/Seoul tz_convert 는 KR-only 가정이라 US 일봉 날짜를 하루 이동시킬 수 있음.
                 if not isinstance(frame.index, pd.DatetimeIndex):
-                    frame.index = pd.to_datetime(frame.index, utc=True).tz_convert("Asia/Seoul")
+                    frame.index = pd.to_datetime(frame.index, utc=True)
                 return frame
             except Exception:
                 logging.warning("OHLCV cache read failed for %s — re-fetching", key)
@@ -110,7 +115,8 @@ class PanelLoader:
     def _index_ohlcv(self, start: date, end: date) -> Any:
         import yfinance as yf
 
-        hist = yf.Ticker("^KS11").history(
+        index_symbol = "^KS11" if self._market == "KR" else "^GSPC"
+        hist = yf.Ticker(index_symbol).history(
             start=start.isoformat(), end=end.isoformat(), auto_adjust=False
         )
         col_map = {
@@ -219,7 +225,11 @@ class PanelLoader:
             fundamentals[t] = self._fundamentals(t)
         idx_rows, _ = self._rows(self._index_ohlcv(start, end))
         return Panel(
-            series=series, fundamentals=fundamentals, listings=listings, index_rows=idx_rows
+            series=series,
+            fundamentals=fundamentals,
+            listings=listings,
+            index_rows=idx_rows,
+            market=self._market,
         )
 
 

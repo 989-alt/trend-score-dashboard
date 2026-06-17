@@ -181,7 +181,9 @@ def _score_at(
                 w52_high=w52_high,
                 index_momentum=idx_mom,
                 turnover=panel.turnover_asof(ticker, t),
-                min_turnover=settings.min_turnover_krw,
+                min_turnover=(
+                    settings.min_turnover_usd if panel.market == "US" else settings.min_turnover_krw
+                ),
                 settings=settings,
             )
         )
