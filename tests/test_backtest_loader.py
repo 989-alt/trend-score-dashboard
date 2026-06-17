@@ -201,3 +201,82 @@ def test_ohlcv_exception_returns_none(tmp_path) -> None:
         result = loader._ohlcv("005930", date(2023, 1, 2), date(2023, 1, 3))
 
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# 6. 디스크 캐시: 두 번째 호출은 네트워크 없이 캐시에서 반환
+# ---------------------------------------------------------------------------
+
+
+def _make_kr_frame(dates=_DATES_TZ) -> pd.DataFrame:
+    """_fetch_ohlcv 가 반환하는 한글 컬럼 + tz-aware DatetimeIndex 형태."""
+    return pd.DataFrame(
+        {
+            "시가": [100.0, 101.0],
+            "고가": [102.0, 103.0],
+            "저가": [99.0, 100.0],
+            "종가": [101.0, 102.0],
+            "거래량": [1000.0, 1100.0],
+        },
+        index=dates,
+    )
+
+
+def test_ohlcv_disk_cache_second_call_no_network(monkeypatch, tmp_path) -> None:
+    """동일 (ticker, start, end) 로 _ohlcv 를 두 번 호출하면 _fetch_ohlcv 는
+    정확히 1회만 호출되고, 두 반환값은 _rows 출력이 동일해야 한다."""
+    loader = PanelLoader(dart=None, cache_dir=tmp_path)
+
+    call_count = 0
+
+    def _stub_fetch(ticker: str, start: date, end: date) -> pd.DataFrame:
+        nonlocal call_count
+        call_count += 1
+        return _make_kr_frame()
+
+    monkeypatch.setattr(loader, "_fetch_ohlcv", _stub_fetch)
+
+    start = date(2023, 1, 2)
+    end = date(2023, 1, 3)
+
+    frame1 = loader._ohlcv("005930", start, end)
+    frame2 = loader._ohlcv("005930", start, end)
+
+    # 네트워크(fetch) 는 정확히 1회만
+    assert call_count == 1
+
+    # 두 반환값이 _rows 에서 동일하게 동작해야 한다
+    rows1, _ = PanelLoader._rows(frame1)
+    rows2, _ = PanelLoader._rows(frame2)
+    assert len(rows1) == len(rows2) == 2
+    assert [r.close for r in rows1] == [r.close for r in rows2]
+    assert [r.date for r in rows1] == [r.date for r in rows2]
+
+
+def test_ohlcv_corrupt_cache_fail_open(monkeypatch, tmp_path) -> None:
+    """캐시 파일이 깨져 있어도 _fetch_ohlcv 로 폴백하고 예외가 빠져나오지 않는다."""
+    loader = PanelLoader(dart=None, cache_dir=tmp_path)
+
+    # 캐시 디렉터리에 corrupt 파일을 미리 심어 둔다
+    cache_subdir = tmp_path / "ohlcv"
+    cache_subdir.mkdir(parents=True, exist_ok=True)
+    start = date(2023, 1, 2)
+    end = date(2023, 1, 3)
+    # parquet 과 json 둘 다 깨진 파일을 넣어 어떤 포맷이든 읽기 실패하게 함
+    for ext in ("parquet", "json"):
+        corrupt = cache_subdir / f"005930_{start.isoformat()}_{end.isoformat()}.{ext}"
+        corrupt.write_bytes(b"NOT_VALID_DATA")
+
+    call_count = 0
+
+    def _stub_fetch(ticker: str, s: date, e: date) -> pd.DataFrame:
+        nonlocal call_count
+        call_count += 1
+        return _make_kr_frame()
+
+    monkeypatch.setattr(loader, "_fetch_ohlcv", _stub_fetch)
+
+    result = loader._ohlcv("005930", start, end)
+
+    assert result is not None
+    assert call_count == 1  # 캐시 실패 → fetch 폴백 1회

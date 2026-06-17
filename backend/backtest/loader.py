@@ -41,10 +41,9 @@ class PanelLoader:
         self._cache_dir = cache_dir
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
-    def _ohlcv(self, ticker: str, start: date, end: date) -> Any:
-        """yfinance 로 KR 주가 OHLCV 조회. .KS(KOSPI) 먼저, 빈 결과면 .KQ(KOSDAQ) fallback.
-        둘 다 빈/오류 → None (build 가 해당 종목 skip — fail-open).
-        거래대금 컬럼 없음 → _rows 의 종가×거래량 프록시가 자동 적용됨.
+    def _fetch_ohlcv(self, ticker: str, start: date, end: date) -> Any:
+        """yfinance 로 KR 주가 OHLCV 조회 (네트워크). _ohlcv 캐시 래퍼가 호출한다.
+        .KS(KOSPI) 먼저, 빈 결과면 .KQ(KOSDAQ) fallback. 둘 다 빈/오류 → None.
         """
         import yfinance as yf
 
@@ -65,6 +64,48 @@ class PanelLoader:
         if result is None:
             result = _fetch(".KQ")
         return result
+
+    def _ohlcv(self, ticker: str, start: date, end: date) -> Any:
+        """디스크 캐시 래퍼. HIT → 캐시 로드 반환. MISS → _fetch_ohlcv → 저장 → 반환.
+        None(상폐/오류) 은 캐시하지 않아 다음 실행에서 재시도.
+        캐시 읽기/쓰기 오류는 fail-open — 빌드를 막지 않는다.
+        거래대금 컬럼 없음 → _rows 의 종가×거래량 프록시가 자동 적용됨.
+        """
+        import logging
+        import warnings
+
+        import pandas as pd
+
+        cache_subdir = self._cache_dir / "ohlcv"
+        cache_subdir.mkdir(parents=True, exist_ok=True)
+        key = f"{ticker}_{start.isoformat()}_{end.isoformat()}"
+        cache_path = cache_subdir / f"{key}.json"
+
+        # --- 캐시 HIT 시도 ---
+        if cache_path.exists():
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    frame = pd.read_json(cache_path, orient="table")
+                # DatetimeIndex 복원 확인
+                if not isinstance(frame.index, pd.DatetimeIndex):
+                    frame.index = pd.to_datetime(frame.index, utc=True).tz_convert("Asia/Seoul")
+                return frame
+            except Exception:
+                logging.warning("OHLCV cache read failed for %s — re-fetching", key)
+
+        # --- 캐시 MISS: 네트워크 fetch ---
+        frame = self._fetch_ohlcv(ticker, start, end)
+        if frame is None:
+            return None
+
+        # --- 캐시 저장 (fail-open) ---
+        try:
+            frame.to_json(cache_path, orient="table", date_format="iso")
+        except Exception:
+            logging.warning("OHLCV cache write failed for %s — continuing without cache", key)
+
+        return frame
 
     def _index_ohlcv(self, start: date, end: date) -> Any:
         import yfinance as yf
