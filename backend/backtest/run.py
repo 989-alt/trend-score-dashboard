@@ -641,6 +641,20 @@ def main(argv: list[str] | None = None) -> int:
             "report_compare_{variant}.{md,json} 을 출력(walk-forward OOS dates 기준)."
         ),
     )
+    # Task 8a — 알파 발굴 호스레이스 오케스트레이션
+    p.add_argument(
+        "--horserace",
+        action="store_true",
+        help="후보 팩터 풀 horse-race(OOS 단조성+CI+p+FDR+홀드아웃) → 승자로 alpha_composite 검증",
+    )
+    p.add_argument(
+        "--universe-top-n",
+        type=int,
+        default=200,
+        help="호스레이스 자동 KR 유니버스 후보 크기(거래대금 상위 N; --tickers 미지정 시)",
+    )
+    p.add_argument("--horizon", type=int, default=20, help="호스레이스 forward-return 호라이즌(봉)")
+    p.add_argument("--q", default="0.10", help="BH-FDR 다중검정 q 임계")
     args = p.parse_args(argv)
 
     start = datetime.strptime(args.start, "%Y-%m-%d").date()
@@ -650,6 +664,10 @@ def main(argv: list[str] | None = None) -> int:
         dart=DartClient(dart_key) if dart_key else None, cache_dir=Path(args.out) / "cache"
     )
     tickers = [t.strip().zfill(6) for t in args.tickers.split(",") if t.strip()]
+    if not tickers and args.horserace:
+        from backend.backtest.universe import build_kr_universe
+
+        tickers = build_kr_universe(args.universe_top_n, Path(args.out) / "cache")
     if not tickers:
         from pykrx import stock
 
@@ -670,6 +688,44 @@ def main(argv: list[str] | None = None) -> int:
     )
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
+    if args.horserace:
+        from backend.backtest.factor_pool import build_factor_pool
+        from backend.backtest.horserace import run_horserace
+        from backend.backtest.report import render_horserace_json, render_horserace_markdown
+
+        wf = WalkForwardConfig(n_folds=args.n_folds, holdout_frac=Decimal(args.holdout_frac))
+        pool = build_factor_pool()
+        lb = run_horserace(panel, cfg, wf, pool, horizon=args.horizon, q=Decimal(args.q))
+        (out_dir / "report_horserace.md").write_text(
+            render_horserace_markdown(lb), encoding="utf-8"
+        )
+        (out_dir / "report_horserace.json").write_text(
+            json.dumps(render_horserace_json(lb), ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        print(render_horserace_markdown(lb))
+        winners = {r.name: pool[r.name] for r in lb.results if r.winner}
+        print(f"\n승자 팩터 {len(winners)}개: {sorted(winners)}")
+        if winners:
+            from backend.backtest.compare import (
+                compare_presets,
+                render_comparison_json,
+                render_comparison_markdown,
+            )
+
+            cmp_result = compare_presets(
+                panel, cfg, wf, variant_preset="alpha_composite", alpha_factors=winners
+            )
+            (out_dir / "report_compare_alpha_composite.md").write_text(
+                render_comparison_markdown(cmp_result, cfg), encoding="utf-8"
+            )
+            (out_dir / "report_compare_alpha_composite.json").write_text(
+                json.dumps(render_comparison_json(cmp_result, cfg), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            print(render_comparison_markdown(cmp_result, cfg))
+        else:
+            print("승자 0개 — alpha_composite 검증 생략. 폴백 C(리스크 엔지니어링) 권장.")
+        return 0
     if args.compare:
         from backend.backtest.compare import (
             compare_presets,
