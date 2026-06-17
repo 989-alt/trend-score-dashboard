@@ -52,11 +52,15 @@ def render_markdown(result: BacktestResult, cfg: BacktestConfig) -> str:
         f"- 벤치마크(^KS11) CAGR {s['benchmark_cagr']:.4f} · 초과 CAGR {s['excess_cagr']:.4f}",
         "",
         "## 이벤트스터디 (점수 vs forward-return)",
-        "| 호라이즌 | 단조성(Spearman) | 평균 MAE | 승률 | N |",
-        "|---|---|---|---|---|",
+        "| 호라이즌 | 단조성(Spearman) | 단조성 95%CI | p-value | 평균 MAE | 승률 | N |",
+        "|---|---|---|---|---|---|---|",
     ]
     for h, b in sorted(result.event_study.items()):
-        lines.append(f"| {h}일 | {b.monotonicity} | {b.mae:.4f} | {b.win_rate} | {b.n} |")
+        ci_str = f"[{b.mono_ci_lo:.4f}, {b.mono_ci_hi:.4f}]"
+        lines.append(
+            f"| {h}일 | {b.monotonicity} | {ci_str}"
+            f" | {b.mono_pvalue} | {b.mae:.4f} | {b.win_rate} | {b.n} |"
+        )
     lines += [
         "",
         "## 후보 팩터 예측력 (forward-return 단조성)",
@@ -84,7 +88,12 @@ def render_json(result: BacktestResult, cfg: BacktestConfig) -> dict[str, Any]:
         "event_study": {
             str(h): {
                 "monotonicity": str(b.monotonicity),
+                "mono_ci_lo": str(b.mono_ci_lo),
+                "mono_ci_hi": str(b.mono_ci_hi),
+                "mono_pvalue": str(b.mono_pvalue),
                 "mae": str(b.mae),
+                "mae_ci_lo": str(b.mae_ci_lo),
+                "mae_ci_hi": str(b.mae_ci_hi),
                 "win_rate": str(b.win_rate),
                 "n": b.n,
             }

@@ -28,6 +28,10 @@ class BacktestConfig:
     cost_bps: Decimal = Decimal("41")
     preset: str = "baseline"
     forward_horizons: tuple[int, ...] = (5, 20, 60)
+    # 유의성 모듈 (Layer B) 결정론 시드 및 반복 횟수
+    bootstrap_seed: int = 12345
+    n_resamples: int = 1000
+    n_perms: int = 1000
 
 
 @dataclass(frozen=True)
@@ -36,6 +40,12 @@ class EventStudyBucket:
     mae: Decimal
     win_rate: Decimal
     n: int
+    # Layer B: 유의성 필드 — 기본값 제공하므로 factor_study 구축 코드 변경 불필요
+    mono_ci_lo: Decimal = Decimal("0")
+    mono_ci_hi: Decimal = Decimal("0")
+    mono_pvalue: Decimal = Decimal("1")
+    mae_ci_lo: Decimal = Decimal("0")
+    mae_ci_hi: Decimal = Decimal("0")
 
 
 @dataclass(frozen=True)
@@ -163,9 +173,17 @@ def run_backtest(panel: Panel, cfg: BacktestConfig) -> BacktestResult:
     benchmark_nav: list[Decimal] = [Decimal("1")]
     held: set[str] = set()
     turnover_count = 0
+    # 풀링된 포인트 추정치용 (기존 코드와 동일)
     es_scores: dict[int, list[Decimal]] = {h: [] for h in cfg.forward_horizons}
     es_fwd: dict[int, list[Decimal]] = {h: [] for h in cfg.forward_horizons}
     es_mae: dict[int, list[Decimal]] = {h: [] for h in cfg.forward_horizons}
+    # Layer B: 날짜-블록 그룹 수집
+    # es_groups[h] = list over dates of (scores_at_date, fwds_at_date)
+    es_groups: dict[int, list[tuple[list[Decimal], list[Decimal]]]] = {
+        h: [] for h in cfg.forward_horizons
+    }
+    # mae_groups[h] = list over dates of [maes_at_date]
+    mae_groups: dict[int, list[list[Decimal]]] = {h: [] for h in cfg.forward_horizons}
 
     fs_vals: dict[str, dict[int, list[Decimal]]] = {
         f: {h: [] for h in cfg.forward_horizons} for f in _STUDY_FACTORS
@@ -177,6 +195,10 @@ def run_backtest(panel: Panel, cfg: BacktestConfig) -> BacktestResult:
     for i, t in enumerate(dates):
         ranked = _score_at(panel, t, settings, cfg.preset)
         picks = [tk for tk, _ in ranked[: cfg.top_n]]
+        # 날짜별 임시 버킷
+        date_scores: dict[int, list[Decimal]] = {h: [] for h in cfg.forward_horizons}
+        date_fwds: dict[int, list[Decimal]] = {h: [] for h in cfg.forward_horizons}
+        date_maes: dict[int, list[Decimal]] = {h: [] for h in cfg.forward_horizons}
         for tk, sv in ranked:
             for h in cfg.forward_horizons:
                 fr = _fwd_return(panel, tk, t, h)
@@ -185,6 +207,9 @@ def run_backtest(panel: Panel, cfg: BacktestConfig) -> BacktestResult:
                     es_scores[h].append(sv)
                     es_fwd[h].append(fr)
                     es_mae[h].append(mae)
+                    date_scores[h].append(sv)
+                    date_fwds[h].append(fr)
+                    date_maes[h].append(mae)
             fund = panel.fundamentals_asof(tk, t)
             val = panel.valuation_asof(tk, t)
             factor_vals: dict[str, Decimal | None] = {
@@ -202,6 +227,11 @@ def run_backtest(panel: Panel, cfg: BacktestConfig) -> BacktestResult:
                     if fval is not None:
                         fs_vals[fname][h].append(fval)
                         fs_fwd[fname][h].append(fr)
+        # 날짜 그룹 추가 (비어있으면 추가 안 함)
+        for h in cfg.forward_horizons:
+            if date_scores[h]:
+                es_groups[h].append((date_scores[h], date_fwds[h]))
+                mae_groups[h].append(date_maes[h])
         if i + 1 < len(dates) and picks:
             nxt = dates[i + 1]
             rets: list[Decimal] = []
@@ -224,19 +254,66 @@ def run_backtest(panel: Panel, cfg: BacktestConfig) -> BacktestResult:
                 bench_ret = (ib / ia - Decimal("1")) if (ia and ib and ia > 0) else Decimal("0")
                 benchmark_nav.append(benchmark_nav[-1] * (Decimal("1") + bench_ret))
 
-    event_study = {
-        h: EventStudyBucket(
-            monotonicity=metrics.spearman_monotonicity(es_scores[h], es_fwd[h]),
-            mae=(
-                sum(es_mae[h], Decimal("0")) / Decimal(len(es_mae[h]))
-                if es_mae[h]
-                else Decimal("0")
-            ),
-            win_rate=metrics.win_rate(es_fwd[h]),
-            n=len(es_fwd[h]),
+    # stat_fn 헬퍼 — (score, fwd) 튜플 리스트 → pooled Spearman
+    def _spearman_stat(records: list[tuple[Decimal, Decimal]]) -> Decimal:
+        s = [r[0] for r in records]
+        f = [r[1] for r in records]
+        return metrics.spearman_monotonicity(s, f)
+
+    # stat_fn 헬퍼 — Decimal 리스트 → 평균 MAE
+    def _mean_stat(values: list[Decimal]) -> Decimal:
+        if not values:
+            return Decimal("0")
+        return sum(values, Decimal("0")) / Decimal(len(values))
+
+    event_study: dict[int, EventStudyBucket] = {}
+    for h in cfg.forward_horizons:
+        # 포인트 추정치 — 기존과 동일한 풀링 연산, 수치 불변
+        mono = metrics.spearman_monotonicity(es_scores[h], es_fwd[h])
+        mae_mean = (
+            sum(es_mae[h], Decimal("0")) / Decimal(len(es_mae[h])) if es_mae[h] else Decimal("0")
         )
-        for h in cfg.forward_horizons
-    }
+        wr = metrics.win_rate(es_fwd[h])
+        n = len(es_fwd[h])
+
+        # Layer B: 유의성 계산
+        # bootstrap 그룹: (score, fwd) 튜플 리스트 per date
+        boot_groups = [list(zip(sc_, fw_, strict=True)) for sc_, fw_ in es_groups[h]]
+        if boot_groups:
+            mono_ci_lo, mono_ci_hi = metrics.block_bootstrap_ci(
+                boot_groups,
+                _spearman_stat,
+                n_resamples=cfg.n_resamples,
+                seed=cfg.bootstrap_seed,
+            )
+            mono_pvalue = metrics.permutation_pvalue(
+                es_groups[h],
+                observed=mono,
+                n_perms=cfg.n_perms,
+                seed=cfg.bootstrap_seed,
+            )
+            mae_ci_lo, mae_ci_hi = metrics.block_bootstrap_ci(
+                mae_groups[h],
+                _mean_stat,
+                n_resamples=cfg.n_resamples,
+                seed=cfg.bootstrap_seed,
+            )
+        else:
+            mono_ci_lo = mono_ci_hi = Decimal("0")
+            mono_pvalue = Decimal("1")
+            mae_ci_lo = mae_ci_hi = Decimal("0")
+
+        event_study[h] = EventStudyBucket(
+            monotonicity=mono,
+            mae=mae_mean,
+            win_rate=wr,
+            n=n,
+            mono_ci_lo=mono_ci_lo,
+            mono_ci_hi=mono_ci_hi,
+            mono_pvalue=mono_pvalue,
+            mae_ci_lo=mae_ci_lo,
+            mae_ci_hi=mae_ci_hi,
+        )
     factor_study = {
         fname: {
             h: EventStudyBucket(
