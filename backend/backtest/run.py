@@ -530,6 +530,11 @@ __all__ = [
     "EventStudyBucket",
     "WalkForwardConfig",
     "WalkForwardResult",
+    "_fwd_return",
+    "_mae",
+    "_rebalance_dates",
+    "_score_at",
+    "_walk_forward_splits",
     "build_event_study",
     "run_backtest",
     "run_walk_forward",
@@ -593,6 +598,16 @@ def main(argv: list[str] | None = None) -> int:
         default=1000,
         help="퍼뮤테이션 p-value 반복수(기본 1000)",
     )
+    # T4 — 프리셋 비교 게이트 (paired_diff_ci 기반 Δ단조성·ΔMAE)
+    p.add_argument(
+        "--compare",
+        default="",
+        metavar="VARIANT",
+        help=(
+            "variant 프리셋 이름. 지정 시 variant vs --preset(baseline) 페어드 비교를 수행하고 "
+            "report_compare_{variant}.{md,json} 을 출력(walk-forward OOS dates 기준)."
+        ),
+    )
     args = p.parse_args(argv)
 
     start = datetime.strptime(args.start, "%Y-%m-%d").date()
@@ -622,6 +637,24 @@ def main(argv: list[str] | None = None) -> int:
     )
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
+    if args.compare:
+        from backend.backtest.compare import (
+            compare_presets,
+            render_comparison_json,
+            render_comparison_markdown,
+        )
+
+        wf = WalkForwardConfig(n_folds=args.n_folds, holdout_frac=Decimal(args.holdout_frac))
+        variant = args.compare
+        cmp_result = compare_presets(panel, cfg, wf, variant_preset=variant)
+        cmp_md = render_comparison_markdown(cmp_result, cfg)
+        cmp_json = render_comparison_json(cmp_result, cfg)
+        (out_dir / f"report_compare_{variant}.md").write_text(cmp_md, encoding="utf-8")
+        (out_dir / f"report_compare_{variant}.json").write_text(
+            json.dumps(cmp_json, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        print(cmp_md)
+        return 0
     if args.walk_forward:
         wf = WalkForwardConfig(n_folds=args.n_folds, holdout_frac=Decimal(args.holdout_frac))
         wf_result = run_walk_forward(panel, cfg, wf)
