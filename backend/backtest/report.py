@@ -41,6 +41,21 @@ def _summary(result: BacktestResult, cfg: BacktestConfig) -> dict[str, Any]:
     }
 
 
+def _bucket_json(b: EventStudyBucket) -> dict[str, Any]:
+    """EventStudyBucket → JSON-직렬화용 dict (render_json·render_walk_forward_json 공유)."""
+    return {
+        "monotonicity": str(b.monotonicity),
+        "mono_ci_lo": str(b.mono_ci_lo),
+        "mono_ci_hi": str(b.mono_ci_hi),
+        "mono_pvalue": str(b.mono_pvalue),
+        "mae": str(b.mae),
+        "mae_ci_lo": str(b.mae_ci_lo),
+        "mae_ci_hi": str(b.mae_ci_hi),
+        "win_rate": str(b.win_rate),
+        "n": b.n,
+    }
+
+
 def render_markdown(result: BacktestResult, cfg: BacktestConfig) -> str:
     s = _summary(result, cfg)
     lines = [
@@ -91,20 +106,7 @@ def render_json(result: BacktestResult, cfg: BacktestConfig) -> dict[str, Any]:
             "preset": cfg.preset,
         },
         "summary": {k: str(v) for k, v in _summary(result, cfg).items()},
-        "event_study": {
-            str(h): {
-                "monotonicity": str(b.monotonicity),
-                "mono_ci_lo": str(b.mono_ci_lo),
-                "mono_ci_hi": str(b.mono_ci_hi),
-                "mono_pvalue": str(b.mono_pvalue),
-                "mae": str(b.mae),
-                "mae_ci_lo": str(b.mae_ci_lo),
-                "mae_ci_hi": str(b.mae_ci_hi),
-                "win_rate": str(b.win_rate),
-                "n": b.n,
-            }
-            for h, b in result.event_study.items()
-        },
+        "event_study": {str(h): _bucket_json(b) for h, b in result.event_study.items()},
         "factor_study": {
             fname: {
                 str(h): {"monotonicity": str(b.monotonicity), "win_rate": str(b.win_rate), "n": b.n}
@@ -120,20 +122,6 @@ def _date_span(dates: list[Any]) -> str:
     if not dates:
         return "—"
     return f"{dates[0].isoformat()}~{dates[-1].isoformat()} ({len(dates)})"
-
-
-def _bucket_json(b: EventStudyBucket) -> dict[str, Any]:
-    return {
-        "monotonicity": str(b.monotonicity),
-        "mono_ci_lo": str(b.mono_ci_lo),
-        "mono_ci_hi": str(b.mono_ci_hi),
-        "mono_pvalue": str(b.mono_pvalue),
-        "mae": str(b.mae),
-        "mae_ci_lo": str(b.mae_ci_lo),
-        "mae_ci_hi": str(b.mae_ci_hi),
-        "win_rate": str(b.win_rate),
-        "n": b.n,
-    }
 
 
 def render_walk_forward_markdown(

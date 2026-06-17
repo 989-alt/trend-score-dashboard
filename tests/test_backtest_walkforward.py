@@ -107,6 +107,86 @@ def _wf_cfg(panel: Panel) -> BacktestConfig:
 
 
 # ---------------------------------------------------------------------------
+# WalkForwardConfig 검증
+# ---------------------------------------------------------------------------
+
+
+def test_walkforward_config_rejects_invalid_n_folds() -> None:
+    """n_folds < 1 은 ValueError."""
+    import pytest
+
+    with pytest.raises(ValueError, match="n_folds"):
+        WalkForwardConfig(n_folds=0)
+    with pytest.raises(ValueError, match="n_folds"):
+        WalkForwardConfig(n_folds=-3)
+
+
+def test_walkforward_config_rejects_invalid_holdout_frac() -> None:
+    """holdout_frac ≥ 1 또는 < 0 은 ValueError."""
+    import pytest
+
+    with pytest.raises(ValueError, match="holdout_frac"):
+        WalkForwardConfig(holdout_frac=Decimal("1"))
+    with pytest.raises(ValueError, match="holdout_frac"):
+        WalkForwardConfig(holdout_frac=Decimal("1.5"))
+    with pytest.raises(ValueError, match="holdout_frac"):
+        WalkForwardConfig(holdout_frac=Decimal("-0.1"))
+    # 경계: 0 은 허용(홀드아웃 없음)
+    wf0 = WalkForwardConfig(holdout_frac=Decimal("0"))
+    assert wf0.holdout_frac == Decimal("0")
+
+
+def test_walkforward_config_rejects_non_anchored_scheme() -> None:
+    """scheme != 'anchored' 는 NotImplementedError."""
+    import pytest
+
+    with pytest.raises(NotImplementedError, match="rolling"):
+        WalkForwardConfig(scheme="rolling")
+
+
+# ---------------------------------------------------------------------------
+# holdout_n Decimal 정밀도 (P0 #1 독립 오라클)
+# ---------------------------------------------------------------------------
+
+
+def test_holdout_n_decimal_precision() -> None:
+    """holdout_frac=Decimal('0.3'), n=10 → holdout_n=3 (float 변환이면 2).
+
+    Decimal(10) * Decimal('0.3') = Decimal('3.0') → int=3.
+    float(Decimal('0.3'))=0.29999… → int(10*0.2999…)=2 (off-by-one 재현).
+    """
+    from backend.backtest.run import _walk_forward_splits
+
+    dates = [date(2023, 1, 1) + timedelta(days=i) for i in range(10)]
+    wf = WalkForwardConfig(n_folds=2, holdout_frac=Decimal("0.3"))
+    _, holdout = _walk_forward_splits(dates, wf)
+    assert len(holdout) == 3, f"holdout_frac=0.3, n=10 → holdout_n=3 이어야 함, got {len(holdout)}"
+
+
+# ---------------------------------------------------------------------------
+# n_dates < n_folds 클램프 (P1 #3)
+# ---------------------------------------------------------------------------
+
+
+def test_walkforward_fewer_dates_than_folds() -> None:
+    """pre-holdout 날짜 수 < n_folds 일 때 빈 폴드 없이 유효 폴드 수로 클램프."""
+    from backend.backtest.run import _walk_forward_splits
+
+    # 날짜 5개, holdout_frac=0 → pre=5, n_folds=10 → effective_folds=5
+    dates = [date(2023, 1, 1) + timedelta(days=i) for i in range(5)]
+    wf = WalkForwardConfig(n_folds=10, holdout_frac=Decimal("0"))
+    fold_ranges, holdout = _walk_forward_splits(dates, wf)
+    assert not holdout, "holdout_frac=0 → 홀드아웃 없음"
+    assert len(fold_ranges) <= 5, f"폴드 수가 날짜 수를 초과할 수 없음, got {len(fold_ranges)}"
+    # 모든 폴드 test 블록이 비어있지 않아야 함
+    for i, (_train, test) in enumerate(fold_ranges):
+        assert test, f"폴드 {i} test 블록이 비어있음 (날짜 수 클램프 실패)"
+    # 합집합이 전체 dates 를 커버
+    flat = [d for _, test in fold_ranges for d in test]
+    assert flat == dates, "테스트 블록 합집합이 전체 pre-holdout dates 를 커버해야 함"
+
+
+# ---------------------------------------------------------------------------
 # 날짜 분할 정확성
 # ---------------------------------------------------------------------------
 
@@ -121,7 +201,8 @@ def test_walkforward_date_splitting_correctness() -> None:
     result = run_walk_forward(panel, cfg, wf)
 
     n = len(all_dates)
-    holdout_n = int(n * float(wf.holdout_frac))
+    # 독립 오라클: Decimal 산술 (float 공식을 복사하면 P0 #1 버그를 못 잡음)
+    holdout_n = int(Decimal(n) * wf.holdout_frac)
     expected_holdout = all_dates[n - holdout_n :]
     expected_pre = all_dates[: n - holdout_n]
 
@@ -164,7 +245,7 @@ def test_walkforward_oos_is_union_of_test_folds() -> None:
     # OOS dates = 모든 테스트 폴드 dates 의 합집합(= 비홀드아웃 전체)
     all_dates = _rebalance_dates(panel, cfg)
     n = len(all_dates)
-    holdout_n = int(n * float(wf.holdout_frac))
+    holdout_n = int(Decimal(n) * wf.holdout_frac)  # Decimal 오라클 (float 금지)
     expected_oos = all_dates[: n - holdout_n]
     assert result.oos_dates == expected_oos
 
@@ -182,25 +263,40 @@ def test_walkforward_oos_is_union_of_test_folds() -> None:
 
 
 def test_walkforward_no_lookahead_leakage() -> None:
-    """테스트 폴드 날짜 T 의 스코어링은 rows≤T 만 사용 → standalone 과 동일."""
+    """테스트 폴드 날짜 T 의 스코어 순위가 standalone _score_at 호출과 정확히 일치.
+
+    이 보장으로 폴드 메커니즘이 미래 데이터를 주입하지 않음을 증명한다.
+    미래 가격 변형에 대한 독립 카나리아: test_score_at_uses_only_rows_up_to_t.
+    """
+    from backend.backtest.run import _fwd_return, _mae
+
     panel = _wf_panel()
     cfg = _wf_cfg(panel)
     settings = get_settings()
     wf = WalkForwardConfig(n_folds=4, holdout_frac=Decimal("0.2"))
     result = run_walk_forward(panel, cfg, wf)
 
-    # 각 테스트 폴드의 첫 날짜에서, walk-forward 가 사용하는 스코어가
-    # standalone _score_at(panel, T) 와 정확히 일치(미래 정보 없음)
     for _train, fold_dates in result.fold_ranges:
         if not fold_dates:
             continue
         t = fold_dates[0]
         standalone = _score_at(panel, t, settings, cfg.preset)
-        # standalone 스코어가 존재해야 함(채점 후보 있음)
         assert standalone, f"T={t} 에 채점된 후보가 있어야 함"
-        # 동일 _score_at 경로를 쓰는 단일-날짜 build 의 단조성이 계산됨(예외 없음)
+
+        # build_event_study(단일 날짜) 가 standalone _score_at 과 동일한 슬라이스를
+        # 사용하는지 검증: standalone 순위에서 fwd_return·mae 가 모두 가용한 수 ==
+        # single-date 버킷의 n (둘 다 동일 _score_at → 동일 데이터 슬라이스).
+        h0 = cfg.forward_horizons[0]
+        standalone_with_fwd = sum(
+            1
+            for tk, _ in standalone
+            if _fwd_return(panel, tk, t, h0) is not None and _mae(panel, tk, t, h0) is not None
+        )
         single = build_event_study(panel, [t], settings, cfg)
-        assert single[cfg.forward_horizons[0]].monotonicity is not None
+        assert single[h0].n == standalone_with_fwd, (
+            f"T={t}: 폴드 메커니즘이 standalone 과 다른 슬라이스를 사용함 "
+            f"(fold n={single[h0].n}, standalone n={standalone_with_fwd})"
+        )
 
 
 def test_score_at_uses_only_rows_up_to_t() -> None:

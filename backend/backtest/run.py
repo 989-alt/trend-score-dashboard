@@ -71,6 +71,16 @@ class WalkForwardConfig:
     holdout_frac: Decimal = Decimal("0.2")
     scheme: str = "anchored"
 
+    def __post_init__(self) -> None:
+        if self.n_folds < 1:
+            raise ValueError(f"n_folds must be ≥ 1, got {self.n_folds}")
+        if not (Decimal("0") <= self.holdout_frac < Decimal("1")):
+            raise ValueError(f"holdout_frac must be in [0, 1), got {self.holdout_frac}")
+        if self.scheme != "anchored":
+            raise NotImplementedError(
+                f"scheme={self.scheme!r} is not implemented; only 'anchored' is supported"
+            )
+
 
 @dataclass(frozen=True)
 class WalkForwardResult:
@@ -221,6 +231,8 @@ def build_event_study(
     dates: list[date],
     settings: Settings,
     cfg: BacktestConfig,
+    *,
+    rankings: dict[date, list[tuple[str, Decimal]]] | None = None,
 ) -> dict[int, EventStudyBucket]:
     """순수 헬퍼 — 주어진 리밸런스 dates 에 대한 호라이즌별 이벤트스터디 버킷.
 
@@ -230,6 +242,10 @@ def build_event_study(
     과 `_fwd_return` 둘 다 ≤T 슬라이스·T 이후 가격만 사용).
 
     포트폴리오 시뮬과 독립이므로 run_backtest 의 NAV 부분과 분리해도 수치 불변.
+
+    rankings: 사전 계산된 날짜별 순위({t: _score_at(...)}) 를 제공하면 재채점 생략.
+              None(기본)이면 날짜마다 _score_at 을 직접 호출한다.
+              run_backtest 가 루프에서 수집한 rankings 를 넘겨 이중 채점을 제거한다.
     """
     # 풀링된 포인트 추정치용
     es_scores: dict[int, list[Decimal]] = {h: [] for h in cfg.forward_horizons}
@@ -244,7 +260,11 @@ def build_event_study(
     mae_groups: dict[int, list[list[Decimal]]] = {h: [] for h in cfg.forward_horizons}
 
     for t in dates:
-        ranked = _score_at(panel, t, settings, cfg.preset)
+        ranked = (
+            rankings[t]
+            if (rankings is not None and t in rankings)
+            else _score_at(panel, t, settings, cfg.preset)
+        )
         # 날짜별 임시 버킷
         date_scores: dict[int, list[Decimal]] = {h: [] for h in cfg.forward_horizons}
         date_fwds: dict[int, list[Decimal]] = {h: [] for h in cfg.forward_horizons}
@@ -331,9 +351,12 @@ def run_backtest(panel: Panel, cfg: BacktestConfig) -> BacktestResult:
     fs_fwd: dict[str, dict[int, list[Decimal]]] = {
         f: {h: [] for h in cfg.forward_horizons} for f in _STUDY_FACTORS
     }
+    # 날짜별 사전 계산된 순위 수집 → build_event_study 에 전달(이중 채점 제거).
+    precomputed_rankings: dict[date, list[tuple[str, Decimal]]] = {}
 
     for i, t in enumerate(dates):
         ranked = _score_at(panel, t, settings, cfg.preset)
+        precomputed_rankings[t] = ranked
         picks = [tk for tk, _ in ranked[: cfg.top_n]]
         for tk, _sv in ranked:
             fund = panel.fundamentals_asof(tk, t)
@@ -376,7 +399,8 @@ def run_backtest(panel: Panel, cfg: BacktestConfig) -> BacktestResult:
                 benchmark_nav.append(benchmark_nav[-1] * (Decimal("1") + bench_ret))
 
     # 이벤트스터디 — 전체 dates 의 풀링/유의성(포트폴리오 시뮬과 독립, 수치 불변)
-    event_study = build_event_study(panel, dates, settings, cfg)
+    # precomputed_rankings 를 재사용 → 날짜당 _score_at 1회만 호출(이중 채점 제거).
+    event_study = build_event_study(panel, dates, settings, cfg, rankings=precomputed_rankings)
     factor_study = {
         fname: {
             h: EventStudyBucket(
@@ -412,11 +436,12 @@ def _walk_forward_splits(
       holdout_dates = 마지막 holdout_frac 비율의 dates(단 1회 소진용).
     """
     n = len(dates)
-    holdout_n = int(n * float(wf.holdout_frac))  # truncate — 마지막 holdout_frac
+    holdout_n = int(Decimal(n) * wf.holdout_frac)  # Decimal 곱셈 → truncate (float 금지)
     pre = dates[: n - holdout_n]
     holdout = dates[n - holdout_n :]
     m = len(pre)
-    folds = max(wf.n_folds, 1)
+    # n_folds 는 __post_init__ 이 ≥1 을 보장 — clamp 불필요
+    folds = min(wf.n_folds, max(1, m))  # P1 #3: m < n_folds 시 유효 폴드 수 클램프
     bounds = [m * j // folds for j in range(folds + 1)]  # 0=bounds[0] … m=bounds[-1]
     fold_ranges: list[tuple[list[date], list[date]]] = []
     for i in range(folds):
@@ -443,6 +468,12 @@ def run_walk_forward(panel: Panel, cfg: BacktestConfig, wf: WalkForwardConfig) -
       7) in_sample = 전체 dates 로 build_event_study(= run_backtest.event_study).
 
     룩어헤드 0: _score_at(≤T) + _fwd_return(T 이후 가격) 가 단일 가드 지점.
+
+    알려진 한계: per_fold / oos / in_sample 은 각각 build_event_study 를 독립 호출하므로
+    날짜가 겹치는 구간(예: oos dates ⊂ in_sample dates)에서 _score_at 이 중복 실행된다.
+    run_backtest 는 precomputed_rankings 로 이중 채점을 제거하지만, 워크포워드 4-pass
+    간 de-dup 은 T5(파라미터 피팅) 연계 후 리팩터 예정이다. 대규모 실전 탐색 시에는
+    --n-resamples / --n-perms 를 낮춰 속도를 확보할 것.
     """
     settings = get_settings()
     dates = _rebalance_dates(panel, cfg)
@@ -516,6 +547,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--n-folds", type=int, default=4, help="워크포워드 테스트 폴드 수")
     p.add_argument("--holdout-frac", default="0.2", help="최종 홀드아웃 비율(0~1)")
+    # 부트스트랩/퍼뮤테이션 반복수 — 워크포워드 실전 실행에서 탐색 속도 조절(기본 1000).
+    # 워크포워드는 현재 폴드/OOS/인샘플/홀드아웃 4pass×각 dates 를 재채점하므로
+    # 대규모 실행 시 --n-resamples 200 등으로 낮추면 빠름(정밀도 감소 트레이드오프).
+    p.add_argument(
+        "--n-resamples",
+        type=int,
+        default=1000,
+        help="블록 부트스트랩 반복수(기본 1000; 워크포워드 탐색 시 200 등으로 낮춤)",
+    )
+    p.add_argument(
+        "--n-perms",
+        type=int,
+        default=1000,
+        help="퍼뮤테이션 p-value 반복수(기본 1000)",
+    )
     args = p.parse_args(argv)
 
     start = datetime.strptime(args.start, "%Y-%m-%d").date()
@@ -540,6 +586,8 @@ def main(argv: list[str] | None = None) -> int:
         top_n=args.top_n,
         cost_bps=Decimal(args.cost_bps),
         preset=args.preset,
+        n_resamples=args.n_resamples,
+        n_perms=args.n_perms,
     )
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
