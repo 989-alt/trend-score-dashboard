@@ -1,6 +1,10 @@
-"""pykrx(가격·밸류) + DART(재무) + ^KS11 → Panel.
+"""yfinance(.KS/.KQ) + DART(재무) + ^KS11 → Panel.
 
-Decimal 전면. pykrx DataFrame 한글 컬럼(시가/고가/저가/종가/거래량/거래대금)을 OHLCVRow 로 변환.
+Decimal 전면. yfinance DataFrame 영문 컬럼(Open/High/Low/Close/Volume)을
+한글 컬럼(시가/고가/저가/종가/거래량)으로 매핑해 OHLCVRow 로 변환.
+
+KR 가격원: pykrx 는 KRX(data.krx.co.kr) 직접통신이라 방화벽 환경에서 SSLEOFError 발생.
+yfinance .KS(KOSPI)/.KQ(KOSDAQ) suffix 로 대체 — 라이브 대시보드(KIS 사용)는 무관.
 
 v1 생존편향 한계(명시): build() 는 호출 측이 준 ticker 리스트로 시계열을 만들고,
 종목별 상장구간을 'OHLCV 존재구간(첫 거래일~)'으로 근사한다. 시점별 상폐 추적·
@@ -38,15 +42,29 @@ class PanelLoader:
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _ohlcv(self, ticker: str, start: date, end: date) -> Any:
-        # 대규모 유니버스: 종목별 pykrx 실패가 전체 빌드를 막지 않게 None 반환(build 가 skip).
-        from pykrx import stock
+        """yfinance 로 KR 주가 OHLCV 조회. .KS(KOSPI) 먼저, 빈 결과면 .KQ(KOSDAQ) fallback.
+        둘 다 빈/오류 → None (build 가 해당 종목 skip — fail-open).
+        거래대금 컬럼 없음 → _rows 의 종가×거래량 프록시가 자동 적용됨.
+        """
+        import yfinance as yf
 
-        try:
-            return stock.get_market_ohlcv_by_date(
-                start.strftime("%Y%m%d"), end.strftime("%Y%m%d"), ticker
-            )
-        except Exception:
-            return None
+        _col = {"Open": "시가", "High": "고가", "Low": "저가", "Close": "종가", "Volume": "거래량"}
+
+        def _fetch(suffix: str) -> Any:
+            try:
+                hist = yf.Ticker(f"{ticker}{suffix}").history(
+                    start=start.isoformat(), end=end.isoformat(), auto_adjust=False
+                )
+                if hist is None or hist.empty:
+                    return None
+                return hist.rename(columns=_col)
+            except Exception:
+                return None
+
+        result = _fetch(".KS")
+        if result is None:
+            result = _fetch(".KQ")
+        return result
 
     def _index_ohlcv(self, start: date, end: date) -> Any:
         import yfinance as yf
@@ -120,6 +138,7 @@ class PanelLoader:
     def _valuation(self, ticker: str, start: date, end: date) -> Any:
         # pykrx 밸류(PER/PBR)는 KRX 소스가 인증(KRX_ID/KRX_PW) 요구·일시 장애가 잦다.
         # 실패는 value 렌즈를 비우되(fail-open) 전체 빌드를 막지 않는다.
+        # ※ KRX(data.krx.co.kr)가 네트워크에서 차단된 환경에서는 항상 None → value 렌즈 비어 있음.
         from pykrx import stock
 
         try:
