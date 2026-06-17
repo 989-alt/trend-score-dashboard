@@ -150,6 +150,7 @@ class PanelLoader:
                     roe=ratios.get("roe"),
                     op_margin=ratios.get("op_margin"),
                     rev_growth=ratios.get("rev_growth"),  # v1 성장 프록시(매출성장)
+                    gp=ratios.get("gp"),
                 )
             )
         return sorted(out, key=lambda f: f.rcept_date)

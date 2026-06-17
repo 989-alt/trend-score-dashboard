@@ -17,6 +17,7 @@ class AsOfFundamentals:
     roe: Decimal | None = None
     op_margin: Decimal | None = None
     rev_growth: Decimal | None = None
+    gp: Decimal | None = None
 
 
 @dataclass(frozen=True)
