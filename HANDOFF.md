@@ -21,6 +21,7 @@
    ```
 2. 환경: **uv 설치**(`winget install astral-sh.uv` 또는 `irm https://astral.sh/uv/install.ps1 | iex`) → `uv sync`(Python 3.13). 검증 `uv run pytest -q` → **321 passed, 1 skipped** 이면 정상.
 3. **시크릿 `.env` — 사용자가 프로젝트 루트에 직접 배치**(gitignore라 repo에 없음·커밋 안 됨): `DART_API_KEY`(필수), **KRX 머신이면 `KRX_ID`/`KRX_PW`**(이 PC선 네트워크 차단으로 무용, KRX 머신선 가치렌즈 부활에 사용). 백테스트 `main()`은 `DART_API_KEY`를 **OS 환경변수**로 읽음(`.env`도 pydantic 로드).
+   - ℹ️ **`DATA_MODE=sample` 은 백테스트와 무관** — 라이브 앱 데이터소스만 정함(`market_data.py`만 사용). 백테스트는 yfinance/DART 실데이터를 직접 fetch하므로 `sample`이어도 실데이터로 돈다. `pytest`도 `sample`이 기본·정답. 라이브 서버 띄울 때만 `live`+KIS키.
 4. 레포 밖 연구문서(별도 전송, git에 없음): **`F:\바이브코딩\trend-score-research\`** (`STRATEGY_REFERENCE.md`=팩터 메뉴, `PROGRESS_AND_ROADMAP.md`, `matdongsan_report.md`, `quantlab_js/`).
 5. **현재 위치 한 줄:** 검증 인프라(Layer A/B/C+게이트) 완성·리뷰 완료. entry_bias 수정안은 **실데이터 엄격게이트 FAIL**(단조성 무개선; extension_guard만 5d MAE 유의 축소). 다음 방향=**선택 알파 발견 엔진**(스펙+계획 작성 완료) → §4.
 
