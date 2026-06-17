@@ -93,6 +93,18 @@ class Settings(BaseSettings):
     weight_52w_entry: Decimal = Decimal("0.18")  # entry_bias: near_52w 가중치
     weight_pullback: Decimal = Decimal("0.12")  # entry_bias: pullback_3pos 가중치
 
+    # ── fallback_c 프리셋 파라미터 (백테스트 전용, 라이브 미사용) ──────────
+    # 레이어1: near_52w 가중치 후보(스윕: 0.30/0.20/0.12). 남은 (0.30 - w) 를 pullback 에 배분.
+    weight_52w_fallback: Decimal = Decimal("0.18")
+    # 레이어2 레짐 게이트
+    regime_window: int = 25
+    regime_threshold: int = 5
+    regime_drop: Decimal = Decimal("0.998")
+    # 레이어2 ATR 손절·사이징
+    atr_stop_mult: Decimal = Decimal("2")  # 손절 = 진입 − mult×ATR20
+    risk_pct: Decimal = Decimal("0.01")  # 트레이드당 위험 R%(자본 1%)
+    max_weight_pct: Decimal = Decimal("0.10")  # 포지션 비중 상한
+
     # ── 손절(트레일링) ────────────────────────────────────────────────
     trailing_stop_pct: Decimal = Decimal("8")
     #: 트레일링 peak 추적 윈도(일). 무상태 손절 — 최근 N봉 종가 ∪ 현재가의 최고가.
