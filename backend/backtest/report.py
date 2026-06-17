@@ -5,6 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
+from backend.backtest.horserace import Leaderboard
 from backend.backtest.metrics import annualized_volatility, cagr, max_drawdown
 from backend.backtest.run import (
     BacktestConfig,
@@ -223,7 +224,67 @@ def render_walk_forward_json(
     }
 
 
+def _q4(v: Decimal) -> str:
+    """표시용 4자리 양자화(원본 Decimal 불변)."""
+    return f"{v.quantize(Decimal('0.0001'))}"
+
+
+def render_horserace_markdown(lb: Leaderboard) -> str:
+    """팩터 호스레이스 리더보드 → 마크다운(사람용).
+
+    헤더 + 표(factor | mono | CI [lo, hi] | p | FDR | holdout | winner), lb 순서 1행/팩터.
+    """
+    lines = [
+        "# 팩터 호스레이스 리더보드",
+        "",
+        f"- 호라이즌 {lb.horizon}일 · FDR q={lb.q}",
+        "- winner = FDR 기각 AND OOS CI_lo>0 AND 홀드아웃 단조성>0",
+        "  (유의한 양의 OOS 단조성 + 홀드아웃 재확인)",
+        "",
+        "| factor | mono | CI [lo, hi] | p | FDR | holdout | winner |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for r in lb.results:
+        ci = f"[{_q4(r.ci_lo)}, {_q4(r.ci_hi)}]"
+        fdr = "기각" if r.fdr_reject else "—"
+        win = "winner" if r.winner else "—"
+        lines.append(
+            f"| {r.name} | {_q4(r.mono)} | {ci} | {_q4(r.pvalue)}"
+            f" | {fdr} | {_q4(r.holdout_mono)} | {win} |"
+        )
+    lines += [
+        "",
+        "> **수익 보장 없음.** 룩어헤드 0(≤T 슬라이스)·생존편향 근사(상장구간). "
+        "채택은 in-sample 이 아니라 OOS(테스트 폴드)·홀드아웃 재확인으로 한다.",
+    ]
+    return "\n".join(lines)
+
+
+def render_horserace_json(lb: Leaderboard) -> dict[str, Any]:
+    """팩터 호스레이스 리더보드 → JSON(기계용). Decimal 은 문자열."""
+    return {
+        "horizon": lb.horizon,
+        "q": str(lb.q),
+        "results": [
+            {
+                "name": r.name,
+                "mono": str(r.mono),
+                "ci_lo": str(r.ci_lo),
+                "ci_hi": str(r.ci_hi),
+                "pvalue": str(r.pvalue),
+                "fdr_reject": r.fdr_reject,
+                "holdout_mono": str(r.holdout_mono),
+                "winner": r.winner,
+                "n": r.n,
+            }
+            for r in lb.results
+        ],
+    }
+
+
 __all__ = [
+    "render_horserace_json",
+    "render_horserace_markdown",
     "render_json",
     "render_markdown",
     "render_walk_forward_json",
