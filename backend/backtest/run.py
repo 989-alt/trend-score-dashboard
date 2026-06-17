@@ -693,7 +693,7 @@ def main(argv: list[str] | None = None) -> int:
         dart=DartClient(dart_key) if dart_key else None, cache_dir=Path(args.out) / "cache"
     )
     tickers = [t.strip().zfill(6) for t in args.tickers.split(",") if t.strip()]
-    if not tickers and args.horserace:
+    if not tickers and (args.horserace or args.fallback_c):
         from backend.backtest.universe import build_kr_universe
 
         tickers = build_kr_universe(args.universe_top_n, Path(args.out) / "cache")
