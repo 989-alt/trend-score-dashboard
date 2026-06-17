@@ -28,15 +28,30 @@ def _atr20(rows: list[OHLCVRow]) -> Decimal:
 
 
 def simulate_risk_overlay(
-    panel: Panel, cfg: BacktestConfig, settings: Settings, dates: list[date]
+    panel: Panel,
+    cfg: BacktestConfig,
+    settings: Settings,
+    dates: list[date],
+    *,
+    regime_on: bool = True,
+    atr_on: bool = True,
+    sizing_on: bool = True,
 ) -> OverlayResult:
+    """레짐 보류·ATR 손절·사이징 오버레이로 연속 dates 의 NAV 경로를 시뮬한다.
+
+    토글(레이어2 ablation 용; 모두 기본 True = 기존 동작 불변):
+      regime_on=False → is_risk_off 평가 생략(레짐 현금 미적용; regime_off_dates 빈 채 유지).
+      atr_on=False    → 손절 없음(각 픽은 t_next 종가로 청산; intra-period 손절 루프 생략).
+      sizing_on=False → 등가중(각 픽 weight=1 → 정규화 수익이 단순 평균).
+    룩어헤드 0(≤T 슬라이스·T 이후 가격만), Decimal 전면.
+    """
     nav: list[Decimal] = [Decimal("1")]
     period_returns: list[Decimal] = []
     regime_off: list[date] = []
     cost = cfg.cost_bps / Decimal("10000")
     for i in range(len(dates) - 1):
         t, t_next = dates[i], dates[i + 1]
-        if is_risk_off(
+        if regime_on and is_risk_off(
             panel.index_rows_asof(t),
             window=settings.regime_window,
             threshold=settings.regime_threshold,
@@ -54,20 +69,24 @@ def simulate_risk_overlay(
             entry = panel.price_on_or_after(tk, t + timedelta(days=1))
             if entry is None or entry <= 0 or not rows:
                 continue
-            atr = _atr20(rows)
-            wt = sc.suggested_weight(
-                sc.atr20_over_price(rows),
-                risk_pct=settings.risk_pct,
-                mult=settings.atr_stop_mult,
-                cap=settings.max_weight_pct,
-            )
-            stop = sc.atr_stop_price(entry, atr, mult=settings.atr_stop_mult)
+            if sizing_on:
+                wt = sc.suggested_weight(
+                    sc.atr20_over_price(rows),
+                    risk_pct=settings.risk_pct,
+                    mult=settings.atr_stop_mult,
+                    cap=settings.max_weight_pct,
+                )
+            else:
+                wt = Decimal("1")
             fut = [r for r in panel.series[tk].rows if t < r.date <= t_next]
             exit_px = None
-            for bar in fut:
-                if bar.low <= stop:
-                    exit_px = stop
-                    break
+            if atr_on:
+                atr = _atr20(rows)
+                stop = sc.atr_stop_price(entry, atr, mult=settings.atr_stop_mult)
+                for bar in fut:
+                    if bar.low <= stop:
+                        exit_px = stop
+                        break
             if exit_px is None:
                 exit_px = fut[-1].close if fut else entry
             weighted.append((wt, exit_px / entry - Decimal("1")))

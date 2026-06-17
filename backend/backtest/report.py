@@ -282,7 +282,56 @@ def render_horserace_json(lb: Leaderboard) -> dict[str, Any]:
     }
 
 
+def render_fallback_c_markdown(
+    layer1_rows: list[tuple[str, str, str]], layer2: dict[str, dict[str, str]]
+) -> str:
+    """폴백 C → 마크다운(사람용). 레이어1 진입품질 ΔMAE + 레이어2 오버레이 위험조정.
+
+    레이어1: near_52w 후보별 ΔMAE(20일)·CI_lo (점수 리웨이트 효과).
+    레이어2: 고정 프리셋(baseline)에 오버레이 컴포넌트를 누적 토글한 config별 MDD/Sharpe/Calmar
+             (오버레이 자체의 증분 위험조정 효과 — 점수 불변으로 분리). 값은 이미 문자열.
+    """
+    lines = [
+        "# 폴백 C 리포트 — 레이어1 진입품질 + 레이어2 리스크 오버레이",
+        "",
+        "## 레이어1 — 진입품질 (ΔMAE 20일)",
+        "| near_52w(w) | ΔMAE | ΔMAE CI_lo |",
+        "|---|---|---|",
+    ]
+    for w52, dmae, ci_lo in layer1_rows:
+        lines.append(f"| {w52} | {dmae} | {ci_lo} |")
+    lines += [
+        "",
+        "## 레이어2 — 리스크 오버레이 (위험조정)",
+        "| config | MDD | Sharpe | Calmar |",
+        "|---|---|---|---|",
+    ]
+    for config, m in layer2.items():
+        lines.append(f"| {config} | {m['mdd']} | {m['sharpe']} | {m['calmar']} |")
+    lines += [
+        "",
+        "> **수익 보장 없음 · 경로지표 약한 유의성.** 레이어1 은 점수 리웨이트(진입품질) 효과, "
+        "레이어2 는 고정 프리셋(baseline)에 오버레이를 누적 토글해 오버레이 자체의 증분 위험조정을 "
+        "분리한다. 룩어헤드 0(≤T 슬라이스)·생존편향 근사(상장구간).",
+    ]
+    return "\n".join(lines)
+
+
+def render_fallback_c_json(
+    layer1_rows: list[tuple[str, str, str]], layer2: dict[str, dict[str, str]]
+) -> dict[str, Any]:
+    """폴백 C → JSON(기계용). 값은 이미 문자열(CLI 가 경계에서 str() 처리)."""
+    return {
+        "layer1": [
+            {"w52": w52, "dmae": dmae, "dmae_ci_lo": ci_lo} for w52, dmae, ci_lo in layer1_rows
+        ],
+        "layer2": layer2,
+    }
+
+
 __all__ = [
+    "render_fallback_c_json",
+    "render_fallback_c_markdown",
     "render_horserace_json",
     "render_horserace_markdown",
     "render_json",

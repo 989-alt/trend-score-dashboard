@@ -610,6 +610,8 @@ def main(argv: list[str] | None = None) -> int:
     from backend.backtest.dart_client import DartClient
     from backend.backtest.loader import PanelLoader
     from backend.backtest.report import (
+        render_fallback_c_json,
+        render_fallback_c_markdown,
         render_json,
         render_markdown,
         render_walk_forward_json,
@@ -676,6 +678,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--horizon", type=int, default=20, help="호스레이스 forward-return 호라이즌(봉)")
     p.add_argument("--q", default="0.10", help="BH-FDR 다중검정 q 임계")
+    # 폴백 C — 레이어1 진입품질 ablation + 레이어2 리스크 오버레이 토글 ablation
+    p.add_argument(
+        "--fallback-c",
+        action="store_true",
+        help="폴백 C 레이어1 ΔMAE ablation + 레이어2 리스크 오버레이 위험조정 평가",
+    )
     args = p.parse_args(argv)
 
     start = datetime.strptime(args.start, "%Y-%m-%d").date()
@@ -746,6 +754,67 @@ def main(argv: list[str] | None = None) -> int:
             print(render_comparison_markdown(cmp_result, cfg))
         else:
             print("승자 0개 — alpha_composite 검증 생략. 폴백 C(리스크 엔지니어링) 권장.")
+        return 0
+    if args.fallback_c:
+        from dataclasses import replace
+
+        from backend.backtest.ablation import run_layer1_ablation
+        from backend.backtest.metrics import portfolio_metrics
+        from backend.backtest.portfolio import simulate_risk_overlay
+
+        settings = get_settings()
+        wf = WalkForwardConfig(n_folds=args.n_folds, holdout_frac=Decimal(args.holdout_frac))
+        # 레이어1 — near_52w 후보별 진입품질 ΔMAE(20일) (점수 리웨이트 효과).
+        l1 = run_layer1_ablation(
+            panel,
+            cfg,
+            wf,
+            w52_candidates=[Decimal("0.30"), Decimal("0.20"), Decimal("0.12")],
+        )
+        layer1_rows = [(str(r.w52), str(r.dmae_20), str(r.dmae_ci_lo_20)) for r in l1]
+        # 레이어2 — 고정 프리셋(baseline)에 오버레이를 누적 토글해 오버레이 자체의 증분 효과 분리.
+        dates = _rebalance_dates(panel, cfg)
+        fold_ranges, holdout = _walk_forward_splits(dates, wf)
+        segments = [test for _tr, test in fold_ranges if len(test) >= 2]
+        if len(holdout) >= 2:
+            segments.append(holdout)
+        base_cfg = replace(cfg, preset="baseline")
+        overlay_configs = {
+            "no_overlay": (False, False, False),
+            "+regime": (True, False, False),
+            "+regime+atr": (True, True, False),
+            "+regime+atr+sizing": (True, True, True),
+        }
+        layer2: dict[str, dict[str, str]] = {}
+        for name, (regime_on, atr_on, sizing_on) in overlay_configs.items():
+            chained: list[Decimal] = []
+            for seg in segments:
+                res = simulate_risk_overlay(
+                    panel,
+                    base_cfg,
+                    settings,
+                    seg,
+                    regime_on=regime_on,
+                    atr_on=atr_on,
+                    sizing_on=sizing_on,
+                )
+                chained.extend(res.period_returns)
+            combined_nav = [Decimal("1")]
+            for r in chained:
+                combined_nav.append(combined_nav[-1] * (Decimal("1") + r))
+            m = portfolio_metrics(combined_nav, chained, periods_per_year=12)
+            layer2[name] = {
+                "mdd": str(m["mdd"]),
+                "sharpe": str(m["sharpe"]),
+                "calmar": str(m["calmar"]),
+            }
+        md = render_fallback_c_markdown(layer1_rows, layer2)
+        (out_dir / "report_fallback_c.md").write_text(md, encoding="utf-8")
+        (out_dir / "report_fallback_c.json").write_text(
+            json.dumps(render_fallback_c_json(layer1_rows, layer2), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        print(md)
         return 0
     if args.compare:
         from backend.backtest.compare import (
