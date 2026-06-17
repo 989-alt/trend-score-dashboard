@@ -484,6 +484,25 @@ def compute_pullback_3pos(rows: list[OHLCVRow], settings: Settings) -> Decimal:
         return (max_pb - depth) / span
 
 
+def atr_stop_price(entry: Decimal, atr: Decimal, *, mult: Decimal = Decimal("2")) -> Decimal:
+    """ATR 손절가 = max(0, entry − mult×atr)."""
+    return max(Decimal("0"), entry - mult * atr)
+
+
+def suggested_weight(
+    atr_over_price: Decimal,
+    *,
+    risk_pct: Decimal = Decimal("0.01"),
+    mult: Decimal = Decimal("2"),
+    cap: Decimal = Decimal("0.10"),
+) -> Decimal:
+    """포지션 비중 = risk_pct / (mult × atr/price), [0, cap] 클램프. atr/price≤0 이면 0."""
+    denom = mult * atr_over_price
+    if denom <= 0:
+        return Decimal("0")
+    return max(Decimal("0"), min(cap, risk_pct / denom))
+
+
 def grade_for_score(score_100: Decimal, settings: Settings) -> Grade:
     """0~100 점수 → 등급.
 
@@ -508,6 +527,7 @@ __all__ = [
     "FactorBounds",
     "above_ma200",
     "atr20_over_price",
+    "atr_stop_price",
     "compute_annualized_volatility",
     "compute_extension_guard",
     "compute_momentum",
@@ -523,6 +543,7 @@ __all__ = [
     "proximity_to_52w_high",
     "score_candidates",
     "simple_moving_average",
+    "suggested_weight",
     "trend_template",
     "vol_dryup",
     "volatility_fit",
