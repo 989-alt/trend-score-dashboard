@@ -387,3 +387,41 @@ def test_paired_diff_ci_mismatched_lengths() -> None:
         hi=Decimal("0.975"),
     )
     assert lo == Decimal("0") and hi == Decimal("0")
+
+
+# ---------------------------------------------------------------------------
+# bh_fdr_reject
+# ---------------------------------------------------------------------------
+
+
+def test_bh_fdr_rejects_only_small_pvalues() -> None:
+    from backend.backtest.metrics import bh_fdr_reject
+
+    ps = [Decimal("0.001"), Decimal("0.2"), Decimal("0.04"), Decimal("0.8")]
+    rej = bh_fdr_reject(ps, q=Decimal("0.10"))
+    assert rej == [True, False, True, False]
+
+
+def test_bh_fdr_empty_input() -> None:
+    from backend.backtest.metrics import bh_fdr_reject
+
+    assert bh_fdr_reject([], q=Decimal("0.10")) == []
+
+
+def test_bh_fdr_step_up_all_reject() -> None:
+    """BH step-up: p_(k) <= q*k/m 가 모든 k 에서 성립하면 전부 기각.
+
+    ps = [0.01, 0.02, 0.03, 0.04, 0.05], m=5, q=0.05.
+    정렬 순서 = 동일(이미 오름차순).
+    k=1: 0.01 <= 0.05*1/5 = 0.01  ✓
+    k=2: 0.02 <= 0.05*2/5 = 0.02  ✓
+    k=3: 0.03 <= 0.05*3/5 = 0.03  ✓
+    k=4: 0.04 <= 0.05*4/5 = 0.04  ✓
+    k=5: 0.05 <= 0.05*5/5 = 0.05  ✓
+    → thresh_rank=5 → 모두 기각.
+    """
+    from backend.backtest.metrics import bh_fdr_reject
+
+    ps = [Decimal("0.01"), Decimal("0.02"), Decimal("0.03"), Decimal("0.04"), Decimal("0.05")]
+    rej = bh_fdr_reject(ps, q=Decimal("0.05"))
+    assert rej == [True, True, True, True, True]

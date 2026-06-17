@@ -244,8 +244,26 @@ def paired_diff_ci(
     return percentile(boot_diffs, lo), percentile(boot_diffs, hi)
 
 
+def bh_fdr_reject(pvalues: list[Decimal], *, q: Decimal) -> list[bool]:
+    """Benjamini-Hochberg: FDR<=q 로 기각할 가설 마스크. 원래 순서로 반환."""
+    m = len(pvalues)
+    if m == 0:
+        return []
+    order = sorted(range(m), key=lambda i: pvalues[i])
+    thresh_rank = -1
+    for rank, i in enumerate(order, start=1):
+        if pvalues[i] <= q * Decimal(rank) / Decimal(m):
+            thresh_rank = rank
+    reject = [False] * m
+    for rank, i in enumerate(order, start=1):
+        if rank <= thresh_rank:
+            reject[i] = True
+    return reject
+
+
 __all__ = [
     "annualized_volatility",
+    "bh_fdr_reject",
     "block_bootstrap_ci",
     "cagr",
     "max_adverse_excursion",
