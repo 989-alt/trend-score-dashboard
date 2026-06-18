@@ -16,7 +16,8 @@ from __future__ import annotations
 import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
+from decimal import Decimal
 from typing import cast, get_args
 from zoneinfo import ZoneInfo
 
@@ -29,6 +30,13 @@ from backend import market_hours
 from backend import scheduler as sched
 from backend.config import ROOT_DIR, Settings, get_settings
 from backend.engine import build_themes_response, ticker_detail
+from backend.news.api_models import (
+    NewsIssue,
+    NewsIssuesResponse,
+    NewsMessage,
+    WeeklyResponse,
+)
+from backend.news.issues import build_issues, load_severity
 from backend.news.store import NewsStore
 from backend.schemas import (
     DISCLAIMER,
@@ -99,6 +107,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """
         store = Store(cfg.db_path)
         news_store = NewsStore(cfg.news_db_path)
+        severity = load_severity(cfg.news_severity_path)
         themes: list[ThemeDef] = load_themes(cfg.themes_path)
         scheduler: AsyncIOScheduler = sched.build_scheduler(store, cfg, news_store)
         scheduler.start()
@@ -115,6 +124,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         application.state.settings = cfg
         application.state.store = store
         application.state.news_store = news_store
+        application.state.severity = severity
         application.state.themes = themes
         application.state.scheduler = scheduler
         application.state.initial_thread = initial_thread
@@ -177,6 +187,58 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if entry is None:
             raise HTTPException(status_code=404, detail=f"ticker not found: {code}")
         return entry
+
+    @application.get("/api/news/issues", response_model=NewsIssuesResponse)
+    async def news_issues() -> NewsIssuesResponse:
+        """긴급도순 Top10 이슈(최근 48h) + 구성 원문. 점수 무반영·면책 포함."""
+        news_store: NewsStore = application.state.news_store
+        store: Store = application.state.store
+        severity: dict[str, Decimal] = application.state.severity
+        names: set[str] = set()
+        for market in _MARKETS:
+            snap = store.load_snapshot(market)
+            if snap is not None:
+                names |= {entry.name for entry in snap.entries}
+        now = datetime.now(tz=_SEOUL)
+        items = news_store.recent_raw(now - timedelta(hours=48))
+        issues = build_issues(items, names, severity, now=now)
+        return NewsIssuesResponse(
+            generated_at=now,
+            disclaimer=DISCLAIMER,
+            issues=[
+                NewsIssue(
+                    key=issue.key,
+                    title=issue.title,
+                    urgency=issue.urgency,
+                    channels=list(issue.channels),
+                    severity=issue.severity,
+                    count=issue.count,
+                    last_ts=issue.last_ts,
+                    messages=[
+                        NewsMessage(
+                            channel=it.channel,
+                            ts_kst=it.ts_kst,
+                            text=it.text,
+                            urls=list(it.urls),
+                        )
+                        for it in issue.items
+                    ],
+                )
+                for issue in issues
+            ],
+        )
+
+    @application.get("/api/news/weekly", response_model=WeeklyResponse)
+    async def news_weekly() -> WeeklyResponse:
+        """최신 주간 한국어 요약(없으면 None) + 면책."""
+        news_store: NewsStore = application.state.news_store
+        weekly = news_store.latest_weekly()
+        return WeeklyResponse(
+            week_start=weekly.week_start if weekly else None,
+            kr_markdown=weekly.kr_markdown if weekly else None,
+            generated_at=weekly.generated_at if weekly else None,
+            disclaimer=DISCLAIMER,
+        )
 
     # 정적 SPA — 산출물이 있으면 마운트, 없으면 루트 JSON 안내를 노출(API 전용).
     if _FRONTEND_DIST.is_dir():

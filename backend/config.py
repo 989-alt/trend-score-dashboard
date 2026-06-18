@@ -95,6 +95,8 @@ class Settings(BaseSettings):
     telethon_session_path: Path = DATA_DIR / "telethon"
     #: 수집 대상 텔레그램 채널(쉼표구분, @ 없이 username).
     news_channels: str = "FastStockNews,goodnews_honey,getfeed,jusikbiso"
+    #: 이슈 긴급도 심각도 사전(표시 정렬용).
+    news_severity_path: Path = DATA_DIR / "news_severity_lexicon.yml"
 
     # ── 테마 ───────────────────────────────────────────────────────────
     top_n_per_theme: int = Field(default=8, ge=1)
