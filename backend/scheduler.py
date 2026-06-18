@@ -23,6 +23,7 @@ from backend.engine import score_market
 from backend.market_data import get_provider
 from backend.news.collector import collect_once
 from backend.news.factset import collect_factset
+from backend.news.rss import collect_rss_once
 from backend.news.store import NewsStore
 from backend.news.summary import summarize_week
 from backend.schemas import Market, Snapshot
@@ -81,8 +82,13 @@ def _run_prep(market: Market, store: Store, settings: Settings) -> None:
 
 
 async def _run_news_poll(news_store: NewsStore, settings: Settings) -> None:
-    """5분 폴링 — 텔레그램 채널 catch-up(fail-open 은 collect_once 내부)."""
+    """텔레그램 catch-up 폴링(주기=news_poll_interval_min, fail-open 은 collect_once 내부)."""
     await collect_once(news_store, settings)
+
+
+async def _run_news_rss(news_store: NewsStore, settings: Settings) -> None:
+    """RSS 크롤링(동기 feedparser → to_thread). 키 불필요·피드별 fail-open."""
+    await asyncio.to_thread(collect_rss_once, news_store, settings)
 
 
 async def _run_news_weekly(news_store: NewsStore, settings: Settings) -> None:
@@ -124,20 +130,29 @@ def build_scheduler(
             id=f"intraday-{market}",
         )
 
-    # ── 뉴스 잡 (news_store 주입 + 키 있을 때만) ───────────────────────
-    if news_store is not None and settings.app_api_id and settings.app_api_hash:
+    # ── 뉴스 잡 (news_store 주입 시) ───────────────────────────────────
+    if news_store is not None:
+        # RSS 크롤링 — 키 불필요, 항상 등록.
         scheduler.add_job(
-            _run_news_poll,
-            IntervalTrigger(minutes=5, timezone=_SEOUL),
+            _run_news_rss,
+            IntervalTrigger(minutes=settings.news_rss_interval_min, timezone=_SEOUL),
             args=(news_store, settings),
-            id="news-poll",
+            id="news-rss",
         )
-        scheduler.add_job(
-            _run_news_weekly,
-            CronTrigger(day_of_week="sat", hour=8, minute=0, timezone=_SEOUL),
-            args=(news_store, settings),
-            id="news-weekly",
-        )
+        # 텔레그램 폴링·주간요약 — APP_API 키 있을 때만.
+        if settings.app_api_id and settings.app_api_hash:
+            scheduler.add_job(
+                _run_news_poll,
+                IntervalTrigger(minutes=settings.news_poll_interval_min, timezone=_SEOUL),
+                args=(news_store, settings),
+                id="news-poll",
+            )
+            scheduler.add_job(
+                _run_news_weekly,
+                CronTrigger(day_of_week="sat", hour=8, minute=0, timezone=_SEOUL),
+                args=(news_store, settings),
+                id="news-weekly",
+            )
 
     return scheduler
 

@@ -140,7 +140,7 @@ export function App() {
   const showError = !!active.error && !active.data;
 
   return (
-    <div className={isNewsTab ? styles.app : `${styles.app} ${styles.appRailPad}`}>
+    <div className={styles.app}>
       <DemoBanner />
       <div className={styles.container}>
         <Header
@@ -219,7 +219,7 @@ export function App() {
       </div>
 
       {!isNewsTab && (
-        <IssueRail issues={news.data?.issues ?? []} onOpen={openIssue} />
+        <IssueRail data={news.data} onOpen={openIssue} />
       )}
 
       <DetailDrawer entry={selected} onClose={() => setSelected(null)} />

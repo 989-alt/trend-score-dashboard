@@ -97,6 +97,14 @@ class Settings(BaseSettings):
     news_channels: str = "FastStockNews,goodnews_honey,getfeed,jusikbiso"
     #: 이슈 긴급도 심각도 사전(표시 정렬용).
     news_severity_path: Path = DATA_DIR / "news_severity_lexicon.yml"
+    #: 텔레그램 폴링 주기(분). catch-up 이라 1분도 ₩0·flood 무관.
+    news_poll_interval_min: int = Field(default=1, ge=1)
+    #: RSS 크롤링 주기(분). 사이트 예의상 텔레그램보다 느슨하게.
+    news_rss_interval_min: int = Field(default=3, ge=1)
+    #: RSS 피드 목록(운영자 편집형 YAML — 국내외 증시·경제).
+    news_sources_path: Path = DATA_DIR / "news_sources.yml"
+    #: 3-레이어(국내/미국/종합) 각 레이어 Top N.
+    news_top_n_per_layer: int = Field(default=10, ge=1)
 
     # ── 테마 ───────────────────────────────────────────────────────────
     top_n_per_theme: int = Field(default=8, ge=1)

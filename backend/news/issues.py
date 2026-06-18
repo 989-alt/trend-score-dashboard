@@ -70,6 +70,7 @@ class Issue:
     score: Decimal | None = None  # 라이브 추세점수(있으면)
     grade: str | None = None  # 등급(있으면)
     market: str | None = None  # "KR" | "US"
+    headline: str = ""  # 정리된 대표 한 줄(가독성)
 
 
 def load_severity(path: Path) -> dict[str, Decimal]:
@@ -130,6 +131,16 @@ def _baseline_counts(
         if key is not None:
             counts[key] += 1
     return counts
+
+
+def _representative(items: tuple[RawNewsItem, ...]) -> str:
+    """이슈 대표 한 줄 — 구성 메시지를 정리(clean_text)해 가장 정보량 큰(긴) 1줄. 140자 컷."""
+    best = ""
+    for it in items:
+        line = clean_text(it.text)
+        if len(line) > len(best):
+            best = line
+    return best[:140]
 
 
 def build_issues(
@@ -204,6 +215,7 @@ def build_issues(
                 score=meta.score if meta else None,
                 grade=meta.grade if meta else None,
                 market=meta.market if meta else None,
+                headline=_representative(member_items),
             )
         )
 
@@ -211,4 +223,27 @@ def build_issues(
     return issues[:top_n]
 
 
-__all__ = ["Issue", "StockMeta", "build_issues", "clean_text", "load_severity"]
+def group_by_layer(issues: list[Issue], top_n: int) -> dict[str, list[Issue]]:
+    """이슈를 market 기준 3 레이어로 그룹핑(각 urgency 순 Top N). 입력은 이미 정렬됨.
+
+    국내(KR) / 미국(US) / 종합(거시·심각도 키 = market None). 사용자 확정 구조.
+    """
+    layers: dict[str, list[Issue]] = {"domestic": [], "us": [], "macro": []}
+    for issue in issues:
+        if issue.market == "KR":
+            layers["domestic"].append(issue)
+        elif issue.market == "US":
+            layers["us"].append(issue)
+        else:
+            layers["macro"].append(issue)
+    return {name: bucket[:top_n] for name, bucket in layers.items()}
+
+
+__all__ = [
+    "Issue",
+    "StockMeta",
+    "build_issues",
+    "clean_text",
+    "group_by_layer",
+    "load_severity",
+]

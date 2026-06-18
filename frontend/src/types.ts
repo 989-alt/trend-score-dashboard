@@ -244,12 +244,15 @@ export interface RawNewsIssue {
   score?: number | string | null;
   grade?: string | null;
   market?: string | null;
+  headline?: string | null;
 }
 
 export interface RawNewsIssuesResponse {
   generated_at: string;
   disclaimer: string;
-  issues: RawNewsIssue[];
+  domestic: RawNewsIssue[];
+  us: RawNewsIssue[];
+  macro: RawNewsIssue[];
 }
 
 export interface RawWeeklyResponse {
@@ -281,12 +284,16 @@ export interface NewsIssue {
   score: number | null;
   grade: Grade | null;
   market: Market | null;
+  headline: string;
 }
 
+/** 3 레이어(국내/미국/종합) 각 urgency 순. */
 export interface NewsIssuesData {
   generatedAt: string;
   disclaimer: string;
-  issues: NewsIssue[];
+  domestic: NewsIssue[];
+  us: NewsIssue[];
+  macro: NewsIssue[];
 }
 
 export interface WeeklyData {

@@ -247,6 +247,7 @@ function parseNewsIssue(r: RawNewsIssue): NewsIssue {
     score: toNum(r.score),
     grade: (r.grade ?? null) as Grade | null,
     market: (r.market ?? null) as Market | null,
+    headline: r.headline ?? "",
   };
 }
 
@@ -255,7 +256,9 @@ export async function fetchNewsIssues(signal?: AbortSignal): Promise<NewsIssuesD
   return {
     generatedAt: raw.generated_at,
     disclaimer: raw.disclaimer,
-    issues: (raw.issues ?? []).map(parseNewsIssue),
+    domestic: (raw.domestic ?? []).map(parseNewsIssue),
+    us: (raw.us ?? []).map(parseNewsIssue),
+    macro: (raw.macro ?? []).map(parseNewsIssue),
   };
 }
 

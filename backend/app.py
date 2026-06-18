@@ -36,7 +36,14 @@ from backend.news.api_models import (
     NewsMessage,
     WeeklyResponse,
 )
-from backend.news.issues import StockMeta, build_issues, load_severity
+from backend.news.issues import (
+    Issue,
+    StockMeta,
+    build_issues,
+    clean_text,
+    group_by_layer,
+    load_severity,
+)
 from backend.news.store import NewsStore
 from backend.schemas import (
     DISCLAIMER,
@@ -218,37 +225,50 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         recent = [it for it in window if it.ts_utc >= recent_cut]
         baseline = [it for it in window if it.ts_utc < recent_cut]
         issues = build_issues(
-            recent, names, severity, now=now, baseline_items=baseline, stock_meta=stock_meta
+            recent,
+            names,
+            severity,
+            now=now,
+            top_n=200,
+            baseline_items=baseline,
+            stock_meta=stock_meta,
         )
+        layers = group_by_layer(issues, cfg.news_top_n_per_layer)
+
+        def _to_news_issue(issue: Issue) -> NewsIssue:
+            return NewsIssue(
+                key=issue.key,
+                title=issue.title,
+                urgency=issue.urgency,
+                channels=list(issue.channels),
+                severity=issue.severity,
+                count=issue.count,
+                last_ts=issue.last_ts,
+                spike=issue.spike,
+                ticker=issue.ticker,
+                score=issue.score,
+                grade=issue.grade,
+                market=issue.market,
+                headline=issue.headline,
+                # 표시 가독성: 원문을 clean_text 로 정리하고, 비는 메시지는 제외.
+                messages=[
+                    NewsMessage(
+                        channel=it.channel,
+                        ts_kst=it.ts_kst,
+                        text=ct,
+                        urls=list(it.urls),
+                    )
+                    for it in issue.items
+                    if (ct := clean_text(it.text))
+                ],
+            )
+
         return NewsIssuesResponse(
             generated_at=now,
             disclaimer=DISCLAIMER,
-            issues=[
-                NewsIssue(
-                    key=issue.key,
-                    title=issue.title,
-                    urgency=issue.urgency,
-                    channels=list(issue.channels),
-                    severity=issue.severity,
-                    count=issue.count,
-                    last_ts=issue.last_ts,
-                    spike=issue.spike,
-                    ticker=issue.ticker,
-                    score=issue.score,
-                    grade=issue.grade,
-                    market=issue.market,
-                    messages=[
-                        NewsMessage(
-                            channel=it.channel,
-                            ts_kst=it.ts_kst,
-                            text=it.text,
-                            urls=list(it.urls),
-                        )
-                        for it in issue.items
-                    ],
-                )
-                for issue in issues
-            ],
+            domestic=[_to_news_issue(i) for i in layers["domestic"]],
+            us=[_to_news_issue(i) for i in layers["us"]],
+            macro=[_to_news_issue(i) for i in layers["macro"]],
         )
 
     @application.get("/api/news/weekly", response_model=WeeklyResponse)

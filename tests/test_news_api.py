@@ -36,10 +36,12 @@ def test_news_issues_route(client: TestClient) -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert body["disclaimer"]
-    assert len(body["issues"]) >= 1
-    top = body["issues"][0]
-    assert top["messages"]  # 구성 원문 포함
-    assert "channel" in top["messages"][0]
+    # 3 레이어 구조(국내/미국/종합). 심각도어 클러스터(종목 아님) → 종합(macro).
+    assert {"domestic", "us", "macro"} <= body.keys()
+    assert len(body["macro"]) >= 1
+    top = body["macro"][0]
+    assert top["headline"]  # 가독성: 정리된 대표 한 줄
+    assert top["messages"] and "channel" in top["messages"][0]
 
 
 def test_news_weekly_route(client: TestClient) -> None:
