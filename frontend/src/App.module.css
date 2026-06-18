@@ -16,6 +16,24 @@
   min-height: 240px;
 }
 
+/* 테마/국장/미장 탭: 콘텐츠 + 긴급 이슈 레일(우측). 좁은 화면선 레일이 아래로 스택. */
+.withRail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 16px;
+  align-items: start;
+}
+
+.contentCol {
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .withRail {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 640px) {
   .container {
     padding: 14px 12px 20px;
