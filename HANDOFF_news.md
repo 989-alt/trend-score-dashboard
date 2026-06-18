@@ -11,7 +11,7 @@
 - **상태:** 뉴스 수집 + 대시보드 "시황" 탭 기능 **100% 구현·테스트·실검증·main 병합·프런트(Pages) 배포 완료.**
   **남은 작업은 단 1건 — OCI 백엔드 배포**(서버에 새 코드 반영). 그것만 하면 라이브 시황 탭이 동작한다.
 - **왜 아직 안 됐나:** OCI 서버 SSH 키가 *인터넷 안 되는 다른 컴퓨터*에 있어 접속을 못 했다. → 키를 USB로 옮기면 됨.
-- **배포 방법(상세, copy-paste):** `C:\Users\Public\OCI_deploy_guide.md` (이 기기 로컬, git 아님). 아래 §2에 요약.
+- **배포 방법(상세, copy-paste):** 레포 `docs/DEPLOY_news.md` (어느 기기서나 clone하면 있음). 아래 §2에 요약.
 - **다른 기기에서 시작:** `git clone …/trend-score-dashboard` → `uv sync` → (로컬 개발 시) `.env`에 키 + 세션(§4).
 
 ---
@@ -55,7 +55,7 @@
   ```
 - **검증:** 서버 `curl -s localhost:8000/api/news/issues` → 이슈 JSON. 브라우저 시황 탭 동작 확인.
 - **그 뒤 자동:** 5분마다 실수집 · 토요일 오전 Gemini 주간요약.
-- **상세 가이드:** `C:\Users\Public\OCI_deploy_guide.md`(키 검색·.ppk 변환·문제해결 포함). ⚠ 비밀키 값은 *이 기기* `trend-score-dashboard/.env`(git 아님)에만 있음 — 다른 기기로 갈 땐 본인이 옮기거나 재발급.
+- **상세 가이드:** 레포 `docs/DEPLOY_news.md`(SSH키 검색·.ppk 변환·접속·문제해결 포함). 이 기기엔 `C:\Users\Public\OCI_deploy_guide.md` 도 있음. ⚠ 비밀키 값은 *이 기기* `trend-score-dashboard/.env`(git 아님)에만 있음 — 다른 기기로 갈 땐 본인이 옮기거나 재발급(my.telegram.org / Google AI Studio).
 
 ---
 
