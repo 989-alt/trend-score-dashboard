@@ -1,5 +1,6 @@
 import type {
   FactorBreakdown,
+  Grade,
   InvestorFlow,
   Market,
   MergedTheme,
@@ -203,6 +204,29 @@ function newsWeeklyUrl(): string {
   return "/api/news/weekly";
 }
 
+function tickerUrl(market: Market, code: string): string | null {
+  const m = market.toLowerCase();
+  if (API_BASE) return `${API_BASE}/api/ticker/${m}/${code}`;
+  if (STATIC_DEMO) return null; // 정적 데모엔 종목 상세 엔드포인트 없음
+  return `/api/ticker/${m}/${code}`;
+}
+
+/** Fetch one ticker's full detail (for opening the drawer from a news issue). */
+export async function fetchTicker(
+  market: Market,
+  code: string,
+  signal?: AbortSignal,
+): Promise<ScoreEntry | null> {
+  const url = tickerUrl(market, code);
+  if (!url) return null;
+  try {
+    const raw = await getJson<RawScoreEntry>(url, signal);
+    return parseEntry(raw);
+  } catch {
+    return null;
+  }
+}
+
 function parseNewsIssue(r: RawNewsIssue): NewsIssue {
   return {
     key: r.key,
@@ -218,6 +242,11 @@ function parseNewsIssue(r: RawNewsIssue): NewsIssue {
       text: m.text,
       urls: Array.isArray(m.urls) ? m.urls : [],
     })),
+    spike: toNum(r.spike) ?? 0,
+    ticker: r.ticker ?? null,
+    score: toNum(r.score),
+    grade: (r.grade ?? null) as Grade | null,
+    market: (r.market ?? null) as Market | null,
   };
 }
 

@@ -203,6 +203,8 @@ const ko = {
   "news.sidebar.title": "긴급 이슈 Top 10",
   "news.urgency": "긴급도",
   "news.severity": "심각도",
+  "news.spike": "급등 ×{n}",
+  "news.scoreDetail": "📊 종목 점수 상세",
   "news.issue.count": "{n}건",
   "news.issue.channels": "{n}개 채널",
   "news.empty": "최근 48시간 집계된 이슈가 없습니다.",

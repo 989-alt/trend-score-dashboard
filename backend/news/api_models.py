@@ -32,6 +32,12 @@ class NewsIssue(BaseModel):
     count: int
     last_ts: datetime
     messages: list[NewsMessage]
+    # 통합(언급 급등 + 점수연결) — 표시용. 기본값으로 기존 계약 호환.
+    spike: Decimal = Decimal("0")
+    ticker: str | None = None
+    score: Decimal | None = None
+    grade: str | None = None
+    market: str | None = None
 
 
 class NewsIssuesResponse(BaseModel):

@@ -36,7 +36,7 @@ from backend.news.api_models import (
     NewsMessage,
     WeeklyResponse,
 )
-from backend.news.issues import build_issues, load_severity
+from backend.news.issues import StockMeta, build_issues, load_severity
 from backend.news.store import NewsStore
 from backend.schemas import (
     DISCLAIMER,
@@ -194,14 +194,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         news_store: NewsStore = application.state.news_store
         store: Store = application.state.store
         severity: dict[str, Decimal] = application.state.severity
-        names: set[str] = set()
+        # 종목명 → 라이브 스냅샷 메타(점수연결). 같은 이름이 양 시장에 있으면 먼저 본 것 유지.
+        stock_meta: dict[str, StockMeta] = {}
         for market in _MARKETS:
             snap = store.load_snapshot(market)
-            if snap is not None:
-                names |= {entry.name for entry in snap.entries}
+            if snap is None:
+                continue
+            for entry in snap.entries:
+                stock_meta.setdefault(
+                    entry.name,
+                    StockMeta(
+                        ticker=entry.ticker,
+                        score=entry.score,
+                        grade=entry.grade.value,
+                        market=entry.market,
+                    ),
+                )
+        names = set(stock_meta)
         now = datetime.now(tz=_SEOUL)
-        items = news_store.recent_raw(now - timedelta(hours=48))
-        issues = build_issues(items, names, severity, now=now)
+        # 최근 48h = 이슈 구성, 직전 48~96h = spike(언급 급등) 베이스라인.
+        window = news_store.recent_raw(now - timedelta(hours=96))
+        recent_cut = now - timedelta(hours=48)
+        recent = [it for it in window if it.ts_utc >= recent_cut]
+        baseline = [it for it in window if it.ts_utc < recent_cut]
+        issues = build_issues(
+            recent, names, severity, now=now, baseline_items=baseline, stock_meta=stock_meta
+        )
         return NewsIssuesResponse(
             generated_at=now,
             disclaimer=DISCLAIMER,
@@ -214,6 +232,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     severity=issue.severity,
                     count=issue.count,
                     last_ts=issue.last_ts,
+                    spike=issue.spike,
+                    ticker=issue.ticker,
+                    score=issue.score,
+                    grade=issue.grade,
+                    market=issue.market,
                     messages=[
                         NewsMessage(
                             channel=it.channel,
