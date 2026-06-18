@@ -1,5 +1,11 @@
 import { useCallback, useMemo, useState } from "react";
-import { fetchNewsIssues, fetchNewsWeekly, fetchSnapshot, fetchThemes } from "./api";
+import {
+  fetchNewsIssues,
+  fetchNewsWeekly,
+  fetchSnapshot,
+  fetchThemes,
+  fetchTicker,
+} from "./api";
 import type { Market, ScoreEntry } from "./types";
 import { usePolling } from "./hooks/usePolling";
 import { DemoBanner } from "./components/DemoBanner";
@@ -115,6 +121,12 @@ export function App() {
     [laneEntries],
   );
 
+  // News issue → detail: a stock-keyed issue fetches its ScoreEntry → opens drawer.
+  const handleSelectTicker = useCallback(async (m: Market, code: string) => {
+    const entry = await fetchTicker(m, code);
+    if (entry) setSelected(entry);
+  }, []);
+
   const showInitialLoading = active.loading && !active.data;
   const showError = !!active.error && !active.data;
 
@@ -173,7 +185,11 @@ export function App() {
               onSelect={setSelected}
             />
           ) : isNewsTab ? (
-            <NewsView data={news.data} weekly={weekly.data} />
+            <NewsView
+              data={news.data}
+              weekly={weekly.data}
+              onSelectTicker={handleSelectTicker}
+            />
           ) : (
             <ThemeBoard
               themes={themes.data?.themes ?? []}

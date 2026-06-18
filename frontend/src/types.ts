@@ -239,6 +239,11 @@ export interface RawNewsIssue {
   count: number;
   last_ts: string;
   messages: RawNewsMessage[];
+  spike?: number | string | null;
+  ticker?: string | null;
+  score?: number | string | null;
+  grade?: string | null;
+  market?: string | null;
 }
 
 export interface RawNewsIssuesResponse {
@@ -271,6 +276,11 @@ export interface NewsIssue {
   count: number;
   lastTs: string;
   messages: NewsMessage[];
+  spike: number;
+  ticker: string | null;
+  score: number | null;
+  grade: Grade | null;
+  market: Market | null;
 }
 
 export interface NewsIssuesData {

@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { useT } from "../i18n";
-import type { NewsIssuesData, WeeklyData } from "../types";
+import type { Market, NewsIssuesData, WeeklyData } from "../types";
+import { GradeBadge } from "./badges/GradeBadge";
 import styles from "./NewsView.module.css";
 
 interface Props {
   data: NewsIssuesData | null;
   weekly: WeeklyData | null;
+  onSelectTicker: (market: Market, code: string) => void;
 }
 
 /** ts_kst is an ISO string with +09:00 offset — slice for a tz-stable "MM-DD HH:mm". */
@@ -15,7 +17,7 @@ function tsLabel(iso: string): string {
 }
 
 /** Read-only "situation" tab: urgency-ranked issue sidebar + raw detail + weekly macro. */
-export function NewsView({ data, weekly }: Props) {
+export function NewsView({ data, weekly, onSelectTicker }: Props) {
   const t = useT();
   const issues = data?.issues ?? [];
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -61,6 +63,17 @@ export function NewsView({ data, weekly }: Props) {
                           {issue.severity > 0 && (
                             <span className={styles.sevDot} aria-hidden="true" />
                           )}
+                          {issue.spike >= 1.5 && (
+                            <span className={styles.spike} data-num>
+                              🔥 {t("news.spike").replace("{n}", issue.spike.toFixed(1))}
+                            </span>
+                          )}
+                          {issue.score !== null && issue.grade && (
+                            <span className={styles.scoreChip}>
+                              <GradeBadge grade={issue.grade} size="sm" />
+                              <span data-num>{issue.score.toFixed(0)}</span>
+                            </span>
+                          )}
                         </span>
                       </span>
                       <span className={styles.urgency} data-num>
@@ -79,9 +92,20 @@ export function NewsView({ data, weekly }: Props) {
             <>
               <div className={styles.detailHead}>
                 <h3 className={styles.detailTitle}>{selected.title}</h3>
-                <span className={styles.detailUrgency} data-num>
-                  {t("news.urgency")} {selected.urgency.toFixed(1)}
-                </span>
+                <div className={styles.detailMeta}>
+                  {selected.ticker && selected.market && (
+                    <button
+                      type="button"
+                      className={styles.scoreBtn}
+                      onClick={() => onSelectTicker(selected.market!, selected.ticker!)}
+                    >
+                      {t("news.scoreDetail")}
+                    </button>
+                  )}
+                  <span className={styles.detailUrgency} data-num>
+                    {t("news.urgency")} {selected.urgency.toFixed(1)}
+                  </span>
+                </div>
               </div>
               <ul className={styles.msgList}>
                 {selected.messages.map((m, i) => (

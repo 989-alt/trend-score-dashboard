@@ -43,6 +43,16 @@ _NOISE_CHARS = "✅📝📜✨📈📉🔔🚨"
 
 
 @dataclass(frozen=True)
+class StockMeta:
+    """종목명 → 라이브 스냅샷 메타(이슈 점수연결용)."""
+
+    ticker: str
+    score: Decimal
+    grade: str
+    market: str
+
+
+@dataclass(frozen=True)
 class Issue:
     """이슈 클러스터 1건(엔티티 단위)."""
 
@@ -54,6 +64,12 @@ class Issue:
     count: int
     last_ts: datetime
     items: tuple[RawNewsItem, ...]
+    # 통합(언급 급등 + 점수연결) — 표시용 추가 신호. urgency 공식·정렬은 불변.
+    spike: Decimal = Decimal("0")  # 최근/(베이스라인+1) 언급 급등 배수(baseline 줄 때만)
+    ticker: str | None = None  # 종목 이슈면 스냅샷 종목코드
+    score: Decimal | None = None  # 라이브 추세점수(있으면)
+    grade: str | None = None  # 등급(있으면)
+    market: str | None = None  # "KR" | "US"
 
 
 def load_severity(path: Path) -> dict[str, Decimal]:
@@ -95,6 +111,27 @@ def _match_severity(text: str, severity: dict[str, Decimal]) -> tuple[str, Decim
     return best_term, best_w
 
 
+def _entity_key(clean: str, stock_names: set[str], severity: dict[str, Decimal]) -> str | None:
+    """클러스터 키(종목명 우선, 없으면 심각도어). build_issues 본 로직과 동일 규칙."""
+    stock = _match_stock(clean, stock_names)
+    if stock is not None:
+        return stock
+    sev_term, _ = _match_severity(clean, severity)
+    return sev_term or None
+
+
+def _baseline_counts(
+    items: list[RawNewsItem], stock_names: set[str], severity: dict[str, Decimal]
+) -> dict[str, int]:
+    """베이스라인 구간의 엔티티별 언급수(spike 분모)."""
+    counts: dict[str, int] = defaultdict(int)
+    for item in items:
+        key = _entity_key(clean_text(item.text), stock_names, severity)
+        if key is not None:
+            counts[key] += 1
+    return counts
+
+
 def build_issues(
     items: list[RawNewsItem],
     stock_names: set[str],
@@ -102,8 +139,20 @@ def build_issues(
     *,
     now: datetime,
     top_n: int = 10,
+    baseline_items: list[RawNewsItem] | None = None,
+    stock_meta: dict[str, StockMeta] | None = None,
 ) -> list[Issue]:
-    """엔티티(종목명 우선, 없으면 심각도어)로 클러스터해 긴급도순 Top N 이슈를 만든다."""
+    """엔티티(종목명 우선, 없으면 심각도어)로 클러스터해 긴급도순 Top N 이슈를 만든다.
+
+    ``baseline_items``(있으면): 동일 길이 과거 구간 언급수로 spike(언급 급등 = 최근/(과거+1))를
+    매긴다 — **urgency 공식·정렬은 불변**, spike 는 표시 신호일 뿐. ``stock_meta``(있으면):
+    종목 키 이슈에 라이브 스냅샷 점수/등급/코드를 부착(클릭→상세 연결용).
+    """
+    baseline = (
+        _baseline_counts(baseline_items, stock_names, severity)
+        if baseline_items is not None
+        else {}
+    )
     groups: dict[str, list[tuple[RawNewsItem, Decimal]]] = defaultdict(list)
     for item in items:
         clean = clean_text(item.text)
@@ -133,6 +182,13 @@ def build_issues(
             + _W_REC * recency
             + _W_SEV * max_sev
         ).quantize(Decimal("0.01"))
+        if baseline_items is not None:
+            spike = (Decimal(count) / (Decimal(baseline.get(key, 0)) + Decimal(1))).quantize(
+                Decimal("0.01")
+            )
+        else:
+            spike = Decimal("0")
+        meta = stock_meta.get(key) if stock_meta else None
         issues.append(
             Issue(
                 key=key,
@@ -143,6 +199,11 @@ def build_issues(
                 count=count,
                 last_ts=last_ts,
                 items=member_items,
+                spike=spike,
+                ticker=meta.ticker if meta else None,
+                score=meta.score if meta else None,
+                grade=meta.grade if meta else None,
+                market=meta.market if meta else None,
             )
         )
 
@@ -150,4 +211,4 @@ def build_issues(
     return issues[:top_n]
 
 
-__all__ = ["Issue", "build_issues", "clean_text", "load_severity"]
+__all__ = ["Issue", "StockMeta", "build_issues", "clean_text", "load_severity"]
