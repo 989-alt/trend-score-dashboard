@@ -15,6 +15,7 @@ dependencies = [
     "pyyaml>=6.0",
     "tenacity>=9.0",
     "python-dateutil>=2.9",
+    "telethon>=1.44.0",
 ]
 
 [dependency-groups]
