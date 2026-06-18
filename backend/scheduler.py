@@ -20,7 +20,9 @@ from backend import market_hours
 from backend.config import Settings
 from backend.engine import score_market
 from backend.market_data import get_provider
-from backend.schemas import Market, Snapshot
+from backend.news.service import refresh_issues
+from backend.news.store import NewsStore
+from backend.schemas import IssuesResponse, Market, Snapshot
 from backend.store import Store
 from backend.themes import load_themes
 
@@ -75,7 +77,18 @@ def _run_prep(market: Market, store: Store, settings: Settings) -> None:
     prep_now(market, store, settings)
 
 
-def build_scheduler(store: Store, settings: Settings) -> AsyncIOScheduler:
+def news_now(store: Store, news_store: NewsStore, settings: Settings) -> IssuesResponse:
+    """이슈 랭킹을 동기로 1회 수집·산출·저장(초기/수동). ``now`` = Asia/Seoul."""
+    now = datetime.now(tz=_SEOUL)
+    return refresh_issues(store, news_store, settings, now)
+
+
+def _run_news(store: Store, news_store: NewsStore, settings: Settings) -> None:
+    """뉴스 잡 본체 — 시장 시간과 무관하게 상시 수집·산출(뉴스는 장외에도 흐른다)."""
+    news_now(store, news_store, settings)
+
+
+def build_scheduler(store: Store, news_store: NewsStore, settings: Settings) -> AsyncIOScheduler:
     """``AsyncIOScheduler`` 를 만들어 잡을 등록한 뒤 반환(미시작 상태).
 
     등록 잡(시장별):
@@ -106,7 +119,16 @@ def build_scheduler(store: Store, settings: Settings) -> AsyncIOScheduler:
             id=f"intraday-{market}",
         )
 
+    # 이슈 랭킹(뉴스) — 시장별이 아닌 단일 잡, 상시 주기(장외 포함).
+    if settings.news_enabled:
+        scheduler.add_job(
+            _run_news,
+            IntervalTrigger(minutes=settings.news_refresh_interval_min, timezone=_SEOUL),
+            args=(store, news_store, settings),
+            id="news",
+        )
+
     return scheduler
 
 
-__all__ = ["build_scheduler", "prep_now", "refresh_now"]
+__all__ = ["build_scheduler", "news_now", "prep_now", "refresh_now"]

@@ -28,7 +28,12 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def client(tmp_path: Path) -> Iterator[TestClient]:
     """격리 DB(sample 모드) 로 구성한 앱의 ``TestClient`` — 초기 스캔 완료까지 대기."""
-    settings = Settings(data_mode="sample", db_path=tmp_path / "test.db")
+    settings = Settings(
+        data_mode="sample",
+        db_path=tmp_path / "test.db",
+        news_db_path=tmp_path / "news.db",
+        news_enabled=False,  # 이슈 수집(네트워크) 비활성 — app 테스트는 hermetic 유지.
+    )
     app = create_app(settings)
     with TestClient(app) as test_client:
         # 비차단 startup → 초기 스캔(백그라운드 스레드) 완료를 기다린 뒤 검증한다.
@@ -95,6 +100,16 @@ def test_ticker_not_found(client: TestClient) -> None:
     """유니버스에 없는 코드는 404."""
     resp = client.get("/api/ticker/kr/000000")
     assert resp.status_code == 404
+
+
+def test_issues_endpoint_non_blocking(client: TestClient) -> None:
+    """이슈 라우트 — 미산출(수집 비활성)이어도 200 + '준비 중' 빈 응답(비차단)."""
+    resp = client.get("/api/issues")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["issues"] == []
+    assert body["disclaimer"] == DISCLAIMER
+    assert "window_hours" in body
 
 
 def test_get_snapshot_non_blocking_returns_preparing(tmp_path: Path) -> None:

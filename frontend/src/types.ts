@@ -220,3 +220,81 @@ export interface ThemesData {
   disclaimer: string;
   themes: MergedTheme[];
 }
+
+// ---------------------------------------------------------------------------
+// Issues (실시간 이슈 랭킹 — see backend/schemas.py IssuesResponse).
+// ---------------------------------------------------------------------------
+
+export type IssueKind = "ticker" | "theme";
+
+export interface RawIssueHeadline {
+  title: string;
+  url?: string | null;
+  source: string;
+  published_at?: string | null;
+}
+
+export interface RawIssueEntry {
+  kind: IssueKind;
+  key: string;
+  name: string;
+  market?: Market | null;
+  mention_count: number;
+  baseline_count: number;
+  spike: Num;
+  score?: Num;
+  grade?: Grade | null;
+  headlines?: RawIssueHeadline[];
+  sources?: string[];
+}
+
+export interface RawIssueCounts {
+  collected: number;
+  items_recent: number;
+  sources_ok: number;
+  sources_failed: number;
+}
+
+export interface RawIssuesResponse {
+  generated_at: string;
+  window_hours: number;
+  disclaimer: string;
+  counts: RawIssueCounts;
+  issues: RawIssueEntry[];
+}
+
+export interface IssueHeadline {
+  title: string;
+  url: string | null;
+  source: string;
+  publishedAt: string | null;
+}
+
+export interface IssueEntry {
+  kind: IssueKind;
+  key: string;
+  name: string;
+  market: Market | null;
+  mentionCount: number;
+  baselineCount: number;
+  spike: number;
+  score: number | null;
+  grade: Grade | null;
+  headlines: IssueHeadline[];
+  sources: string[];
+}
+
+export interface IssueCounts {
+  collected: number;
+  itemsRecent: number;
+  sourcesOk: number;
+  sourcesFailed: number;
+}
+
+export interface IssuesData {
+  generatedAt: string;
+  windowHours: number;
+  disclaimer: string;
+  counts: IssueCounts;
+  issues: IssueEntry[];
+}

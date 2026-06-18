@@ -23,6 +23,7 @@ from backend import market_hours
 from backend import scheduler as sched
 from backend.config import Settings
 from backend.market_data import SampleProvider
+from backend.news.store import NewsStore
 from backend.schemas import Market
 from backend.store import Store
 
@@ -39,6 +40,12 @@ def settings() -> Settings:
 def store(tmp_path: Path) -> Store:
     """임시 SQLite Store (테스트마다 격리)."""
     return Store(tmp_path / "scheduler_test.db")
+
+
+@pytest.fixture
+def news_store(tmp_path: Path) -> NewsStore:
+    """임시 SQLite NewsStore (테스트마다 격리)."""
+    return NewsStore(tmp_path / "scheduler_news_test.db")
 
 
 # ── refresh_now ────────────────────────────────────────────────────────────
@@ -99,28 +106,32 @@ def test_prep_now_warms_then_saves_snapshot(
 # ── build_scheduler: 잡 등록 ─────────────────────────────────────────────────
 
 
-def test_build_scheduler_returns_unstarted(store: Store, settings: Settings) -> None:
+def test_build_scheduler_returns_unstarted(
+    store: Store, news_store: NewsStore, settings: Settings
+) -> None:
     """build_scheduler — AsyncIOScheduler 를 미시작 상태로 반환."""
-    scheduler = sched.build_scheduler(store, settings)
+    scheduler = sched.build_scheduler(store, news_store, settings)
 
     assert isinstance(scheduler, AsyncIOScheduler)
     assert scheduler.running is False
 
 
-def test_build_scheduler_registers_all_jobs(store: Store, settings: Settings) -> None:
-    """build_scheduler — KR/US 각각 prep + intraday 잡(총 4개) 등록."""
-    scheduler = sched.build_scheduler(store, settings)
+def test_build_scheduler_registers_all_jobs(
+    store: Store, news_store: NewsStore, settings: Settings
+) -> None:
+    """build_scheduler — KR/US prep + intraday(4개) + news(1개) 잡 등록."""
+    scheduler = sched.build_scheduler(store, news_store, settings)
 
     job_ids = {job.id for job in scheduler.get_jobs()}
-    assert job_ids == {"prep-KR", "prep-US", "intraday-KR", "intraday-US"}
+    assert job_ids == {"prep-KR", "prep-US", "intraday-KR", "intraday-US", "news"}
 
 
 @pytest.mark.parametrize("market", ["KR", "US"])
 def test_build_scheduler_intraday_interval_trigger(
-    market: Market, store: Store, settings: Settings
+    market: Market, store: Store, news_store: NewsStore, settings: Settings
 ) -> None:
     """intraday 잡 — refresh_interval_min 주기의 IntervalTrigger."""
-    scheduler = sched.build_scheduler(store, settings)
+    scheduler = sched.build_scheduler(store, news_store, settings)
 
     job = scheduler.get_job(f"intraday-{market}")
     assert job is not None
@@ -134,10 +145,10 @@ def test_build_scheduler_intraday_interval_trigger(
     [("KR", "8", "30"), ("US", "22", "0")],
 )
 def test_build_scheduler_prep_cron_trigger(
-    market: Market, hour: str, minute: str, store: Store, settings: Settings
+    market: Market, hour: str, minute: str, store: Store, news_store: NewsStore, settings: Settings
 ) -> None:
     """prep 잡 — KR 08:30 / US 22:00 KST 의 CronTrigger."""
-    scheduler = sched.build_scheduler(store, settings)
+    scheduler = sched.build_scheduler(store, news_store, settings)
 
     job = scheduler.get_job(f"prep-{market}")
     assert job is not None

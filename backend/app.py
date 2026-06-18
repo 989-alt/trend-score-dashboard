@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from typing import cast, get_args
 from zoneinfo import ZoneInfo
@@ -29,9 +29,12 @@ from backend import market_hours
 from backend import scheduler as sched
 from backend.config import ROOT_DIR, Settings, get_settings
 from backend.engine import build_themes_response, ticker_detail
+from backend.news.service import empty_issues
+from backend.news.store import NewsStore
 from backend.schemas import (
     DISCLAIMER,
     HealthResponse,
+    IssuesResponse,
     Market,
     ScoreEntry,
     Snapshot,
@@ -97,8 +100,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         서버가 그동안 안 뜬다 → daemon 스레드로 던지고 즉시 서빙을 시작한다.
         """
         store = Store(cfg.db_path)
+        news_store = NewsStore(cfg.news_db_path)
         themes: list[ThemeDef] = load_themes(cfg.themes_path)
-        scheduler: AsyncIOScheduler = sched.build_scheduler(store, cfg)
+        scheduler: AsyncIOScheduler = sched.build_scheduler(store, news_store, cfg)
         scheduler.start()
 
         def _initial_scan() -> None:
@@ -106,12 +110,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # US ~300종목을 종목당 호출하지 않고 yf.download 배치로 받아 Yahoo 429 회피(FIX-C).
             for market in _MARKETS:
                 sched.prep_now(market, store, cfg)
+            # 스냅샷이 준비된 뒤 이슈 랭킹 1회 산출(렉시콘이 종목명을 잡도록).
+            # 초기 뉴스 수집 실패는 무시(서빙 비차단).
+            if cfg.news_enabled:
+                with suppress(Exception):
+                    sched.news_now(store, news_store, cfg)
 
         initial_thread = threading.Thread(target=_initial_scan, name="initial-scan", daemon=True)
         initial_thread.start()
 
         application.state.settings = cfg
         application.state.store = store
+        application.state.news_store = news_store
         application.state.themes = themes
         application.state.scheduler = scheduler
         application.state.initial_thread = initial_thread
@@ -174,6 +184,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if entry is None:
             raise HTTPException(status_code=404, detail=f"ticker not found: {code}")
         return entry
+
+    @application.get("/api/issues", response_model=IssuesResponse)
+    async def issues() -> IssuesResponse:
+        """실시간 이슈 랭킹 — 저장된 최신 스냅샷(없으면 '준비 중' 빈 응답, 비차단)."""
+        news_store: NewsStore = application.state.news_store
+        existing = news_store.load_issues()
+        if existing is not None:
+            return existing
+        return empty_issues(cfg, datetime.now(tz=_SEOUL))
 
     # 정적 SPA — 산출물이 있으면 마운트, 없으면 루트 JSON 안내를 노출(API 전용).
     if _FRONTEND_DIST.is_dir():

@@ -210,6 +210,68 @@ class ThemesResponse(BaseModel):
     groups: list[ThemeGroup]
 
 
+#: 이슈 단위 — 종목 또는 테마(언급 급등 랭킹의 행 종류).
+IssueKind = Literal["ticker", "theme"]
+
+
+class IssueHeadline(BaseModel):
+    """이슈를 구성한 개별 기사/메시지 헤드라인(샘플 표시·근거)."""
+
+    model_config = _CFG
+
+    title: str
+    url: str | None = None
+    source: str
+    published_at: datetime | None = None
+
+
+class IssueEntry(BaseModel):
+    """실시간 이슈 랭킹 한 항목 — 종목/테마의 최근 언급 급등.
+
+    ``mention_count`` 는 최근 윈도(``IssuesResponse.window_hours``)의 언급수,
+    ``baseline_count`` 는 동일 길이 환산 과거 평균 언급수. ``spike`` 는 분자/(분모+1)
+    비율(클수록 평소보다 급증). ``score``/``grade`` 는 해당 종목이 최신 스냅샷에 있을
+    때만 채운다(테마·미스캔 종목이면 ``None``) — 클릭 시 종목 상세로 잇기 위함.
+    """
+
+    model_config = _CFG
+
+    kind: IssueKind
+    key: str  # 종목코드(ticker) 또는 테마명(theme)
+    name: str
+    market: Market | None = None
+    mention_count: int
+    baseline_count: int
+    spike: Decimal
+    score: Decimal | None = None
+    grade: Grade | None = None
+    headlines: list[IssueHeadline] = Field(default_factory=list)
+    sources: list[str] = Field(default_factory=list)
+
+
+class IssueCounts(BaseModel):
+    """이슈 수집 관측성 — 무음 절단 방지(몇 개 적재·분석, 소스 성공/실패)."""
+
+    model_config = _CFG
+
+    collected: int = 0  # 이번 사이클 새로 적재된 항목수
+    items_recent: int = 0  # 최근 윈도 내 분석 대상 항목수
+    sources_ok: int = 0
+    sources_failed: int = 0
+
+
+class IssuesResponse(BaseModel):
+    """실시간 이슈 랭킹 응답. ``GET /api/issues``."""
+
+    model_config = _CFG
+
+    generated_at: datetime
+    window_hours: int
+    disclaimer: str = DISCLAIMER
+    counts: IssueCounts = Field(default_factory=IssueCounts)
+    issues: list[IssueEntry]
+
+
 class HealthResponse(BaseModel):
     """``GET /healthz``."""
 
@@ -227,6 +289,11 @@ __all__ = [
     "Grade",
     "HealthResponse",
     "InvestorFlow",
+    "IssueCounts",
+    "IssueEntry",
+    "IssueHeadline",
+    "IssueKind",
+    "IssuesResponse",
     "Market",
     "OHLCVRow",
     "ScoreEntry",

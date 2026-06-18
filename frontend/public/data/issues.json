@@ -1,0 +1,48 @@
+{
+  "generated_at": "2026-06-18T09:00:00+09:00",
+  "window_hours": 24,
+  "disclaimer": "본 대시보드는 투자 자문에 해당하지 않으며, 투자의 판단과 결정은 철저히 개인에게 있습니다.",
+  "counts": { "collected": 42, "items_recent": 120, "sources_ok": 8, "sources_failed": 1 },
+  "issues": [
+    {
+      "kind": "ticker",
+      "key": "005930",
+      "name": "삼성전자",
+      "market": "KR",
+      "mention_count": 18,
+      "baseline_count": 4,
+      "spike": "3.60",
+      "score": "82.5",
+      "grade": "strong_buy",
+      "headlines": [
+        {
+          "title": "삼성전자, 3분기 어닝 서프라이즈…HBM 공급 확대",
+          "url": "https://example.com/news/1",
+          "source": "매일경제 증권",
+          "published_at": "2026-06-18T08:40:00+09:00"
+        }
+      ],
+      "sources": ["매일경제 증권", "FastStockNews"]
+    },
+    {
+      "kind": "theme",
+      "key": "반도체",
+      "name": "반도체",
+      "market": null,
+      "mention_count": 31,
+      "baseline_count": 13,
+      "spike": "2.38",
+      "score": null,
+      "grade": null,
+      "headlines": [
+        {
+          "title": "반도체 업황 회복 신호…외국인 순매수 확대",
+          "url": "https://example.com/news/2",
+          "source": "한국경제 증권",
+          "published_at": "2026-06-18T08:10:00+09:00"
+        }
+      ],
+      "sources": ["한국경제 증권", "연합뉴스 경제"]
+    }
+  ]
+}

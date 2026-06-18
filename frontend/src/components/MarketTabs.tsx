@@ -1,7 +1,7 @@
 import { useT } from "../i18n";
 import styles from "./MarketTabs.module.css";
 
-export type TabKey = "themes" | "kr" | "us";
+export type TabKey = "themes" | "issues" | "kr" | "us";
 
 interface Props {
   active: TabKey;
@@ -10,6 +10,7 @@ interface Props {
 
 const TABS: { key: TabKey; labelKey: string }[] = [
   { key: "themes", labelKey: "tab.themes" },
+  { key: "issues", labelKey: "tab.issues" },
   { key: "kr", labelKey: "tab.kr" },
   { key: "us", labelKey: "tab.us" },
 ];

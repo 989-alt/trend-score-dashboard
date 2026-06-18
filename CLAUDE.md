@@ -60,6 +60,28 @@
 - US 유니버스: 정적 화이트리스트 상위 N(기본 30 — yfinance 429 회피).
 - 캐시: `DailyCache`(SQLite, key=market+ticker+오늘+kind). kind = `ohlcv`/`fundamentals`/`index`.
 
+## 실시간 이슈 랭킹 (뉴스 — `backend/news/`)
+
+- **무엇**: RSS + 텔레그램(MTProto) 수집 → **종목·테마 언급 급등(spike) 랭킹**. `GET /api/issues`,
+  프론트 **"실시간 이슈" 탭**. **LLM 미사용·₩0·결정론**(언급수 비교만).
+- **수집**: `data/news_sources.yml`(운영자 편집형). RSS는 키 불필요·즉시 동작. 텔레그램은
+  `TELEGRAM_API_ID/HASH`(.env) + **최초 1회 세션**이 있을 때만(없거나 미인증이면 graceful skip).
+  소스별 fail-open(죽은 피드 1개가 전체를 막지 않음).
+- **저장**: **별도 `data/news.db`**(원시 아카이브 + 이슈 스냅샷) — **`rm dashboard.db*` 캐시
+  초기화에도 보존**(향후 뉴스 전향(forward) 검증의 데이터로 재사용).
+- **렉시콘**: 최신 스냅샷 entries(종목명→코드) + `themes.yml` 키워드에서 구성(별도 네트워크 0).
+  종목 이슈 클릭 → 종목 상세 드로어(`/api/ticker`). 테마 이슈 클릭 → 테마 탭.
+- **랭킹**: 최근 `NEWS_RECENT_HOURS`(24h) 언급수 ÷ 베이스라인(`NEWS_BASELINE_DAYS` 7일) 평균
+  = spike 내림차순. `NEWS_MIN_MENTIONS`(2) 노이즈 필터, 상위 `NEWS_MAX_ISSUES`(30). 잡 = 단일
+  `news` 인터벌(`NEWS_REFRESH_INTERVAL_MIN` 30분), **시장 시간 무관 상시**(장외 포함).
+- **텔레그램 최초 로그인(1회)**: `uv run python scripts/telegram_login.py` → `data/.telegram.session`
+  생성(전화+인증코드 대화형 — 헤드리스 불가). 서버에서도 1회 실행하거나 세션 파일을 같은 경로로
+  복사. 세션은 **시크릿(.gitignore)**.
+- **.env 추가 키**: `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`. (선택: `NEWS_ENABLED=false` 로 끔.)
+- **배포**: `git pull && uv sync`(feedparser·telethon 추가됨) → 세션 준비 → `systemctl restart
+  trend-board.service`. 프론트는 `frontend/**` push → Pages 재빌드(이슈 탭 포함). 정적 데모는
+  `frontend/public/data/issues.json` 샘플 폴백.
+
 ## 배포 (OCI Always Free + Caddy + Pages)
 
 - 서버: OCI Always Free ARM, **swing-bot 과 동일 인스턴스 공유**. `/home/ubuntu/trend-score-dashboard`,

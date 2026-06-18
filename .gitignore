@@ -20,6 +20,10 @@ logs/
 # KIS OAuth 토큰 캐시 — 시크릿(절대 커밋 금지)
 data/.kis_token.json
 
+# 텔레그램 MTProto 세션 — 시크릿(절대 커밋 금지)
+data/.telegram.session
+data/.telegram.session-journal
+
 # 프론트엔드
 frontend/node_modules/
 frontend/dist/

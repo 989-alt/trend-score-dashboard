@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { parseEntry, toNum } from "./api";
-import type { RawScoreEntry } from "./types";
+import { parseEntry, parseIssues, toNum } from "./api";
+import type { RawIssuesResponse, RawScoreEntry } from "./types";
 
 describe("toNum", () => {
   it("parses Decimal-as-string into a number", () => {
@@ -94,5 +94,63 @@ describe("parseEntry", () => {
     const e = parseEntry({ ...raw, market: "US", investor_flow: null });
     expect(e.market).toBe("US");
     expect(e.investorFlow).toBeNull();
+  });
+});
+
+describe("parseIssues", () => {
+  const raw: RawIssuesResponse = {
+    generated_at: "2026-06-18T09:00:00+09:00",
+    window_hours: 24,
+    disclaimer: "x",
+    counts: { collected: 5, items_recent: 50, sources_ok: 8, sources_failed: 1 },
+    issues: [
+      {
+        kind: "ticker",
+        key: "005930",
+        name: "Samsung",
+        market: "KR",
+        mention_count: 18,
+        baseline_count: 4,
+        spike: "3.60",
+        score: "82.5",
+        grade: "strong_buy",
+        headlines: [
+          {
+            title: "h1",
+            url: "https://x",
+            source: "MK",
+            published_at: "2026-06-18T08:40:00+09:00",
+          },
+        ],
+        sources: ["MK"],
+      },
+      {
+        kind: "theme",
+        key: "semis",
+        name: "Semis",
+        mention_count: 31,
+        baseline_count: 13,
+        spike: "2.38",
+      },
+    ],
+  };
+
+  it("normalizes spike/score strings and maps headlines", () => {
+    const d = parseIssues(raw);
+    expect(d.windowHours).toBe(24);
+    expect(d.counts.itemsRecent).toBe(50);
+    expect(d.issues[0].spike).toBe(3.6);
+    expect(d.issues[0].score).toBe(82.5);
+    expect(d.issues[0].market).toBe("KR");
+    expect(d.issues[0].headlines[0].publishedAt).toBe("2026-06-18T08:40:00+09:00");
+  });
+
+  it("defaults missing market/score/grade/headlines for a theme issue", () => {
+    const d = parseIssues(raw);
+    expect(d.issues[1].market).toBeNull();
+    expect(d.issues[1].score).toBeNull();
+    expect(d.issues[1].grade).toBeNull();
+    expect(d.issues[1].headlines).toEqual([]);
+    expect(d.issues[1].sources).toEqual([]);
   });
 });

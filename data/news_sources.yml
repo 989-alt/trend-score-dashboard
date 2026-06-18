@@ -1,0 +1,36 @@
+# 실시간 이슈 랭킹 — 수집 소스 (운영자 편집형 시드).
+# - kind: rss      → url 은 RSS/Atom 피드 주소. feedparser 로 파싱.
+# - kind: telegram → url 은 공개 채널 username(또는 t.me/<handle> 의 handle). Telethon(MTProto).
+# - 소스별 fail-open: 죽은 피드/채널은 조용히 건너뛰고 나머지로 계속한다(랭킹 비차단).
+# - 수집 시 LLM 미사용(₩0). 원문은 data/news.db 에 원시 아카이브로 적재(B 전향검증 겸용).
+sources:
+  # ── RSS (키 불필요·즉시 동작) ──────────────────────────────────────
+  - name: "매일경제 증권"
+    kind: rss
+    url: "https://www.mk.co.kr/rss/50200011/"
+  - name: "한국경제 증권"
+    kind: rss
+    url: "https://www.hankyung.com/feed/finance"
+  - name: "연합뉴스 경제"
+    kind: rss
+    url: "https://www.yna.co.kr/rss/economy.xml"
+  - name: "이데일리 증시"
+    kind: rss
+    url: "https://www.edaily.co.kr/rss/rss_stock.xml"
+  - name: "한겨레 경제"
+    kind: rss
+    url: "https://www.hani.co.kr/rss/economy/"
+
+  # ── 텔레그램 (MTProto — API_ID/HASH + 최초 1회 로그인 세션 필요) ────
+  - name: "FastStockNews"
+    kind: telegram
+    url: "FastStockNews"
+  - name: "goodnews_honey"
+    kind: telegram
+    url: "goodnews_honey"
+  - name: "getfeed"
+    kind: telegram
+    url: "getfeed"
+  - name: "jusikbiso"
+    kind: telegram
+    url: "jusikbiso"

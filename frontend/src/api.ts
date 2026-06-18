@@ -1,10 +1,16 @@
 import type {
   FactorBreakdown,
   InvestorFlow,
+  IssueEntry,
+  IssueHeadline,
+  IssuesData,
   Market,
   MergedTheme,
   RawFactorBreakdown,
   RawInvestorFlow,
+  RawIssueEntry,
+  RawIssueHeadline,
+  RawIssuesResponse,
   RawScoreEntry,
   RawSnapshot,
   RawThemesResponse,
@@ -183,4 +189,80 @@ export async function fetchSnapshot(
 export async function fetchThemes(signal?: AbortSignal): Promise<ThemesData> {
   const raw = await getJson<RawThemesResponse>(themesUrl(), signal);
   return parseThemes(raw);
+}
+
+// ── Issues (실시간 이슈 랭킹) ────────────────────────────────────────────────
+
+function issuesUrl(): string {
+  if (API_BASE) return `${API_BASE}/api/issues`;
+  if (STATIC_DEMO) return `${BASE}data/issues.json`;
+  return "/api/issues";
+}
+
+function tickerUrl(market: Market, code: string): string | null {
+  const m = market.toLowerCase();
+  if (API_BASE) return `${API_BASE}/api/ticker/${m}/${code}`;
+  if (STATIC_DEMO) return null; // 정적 데모엔 종목 상세 엔드포인트가 없음
+  return `/api/ticker/${m}/${code}`;
+}
+
+function parseIssueHeadline(r: RawIssueHeadline): IssueHeadline {
+  return {
+    title: r.title,
+    url: r.url ?? null,
+    source: r.source,
+    publishedAt: r.published_at ?? null,
+  };
+}
+
+function parseIssueEntry(r: RawIssueEntry): IssueEntry {
+  return {
+    kind: r.kind,
+    key: r.key,
+    name: r.name,
+    market: r.market ?? null,
+    mentionCount: r.mention_count,
+    baselineCount: r.baseline_count,
+    spike: toNum(r.spike) ?? 0,
+    score: toNum(r.score),
+    grade: r.grade ?? null,
+    headlines: (r.headlines ?? []).map(parseIssueHeadline),
+    sources: Array.isArray(r.sources) ? r.sources : [],
+  };
+}
+
+export function parseIssues(r: RawIssuesResponse): IssuesData {
+  return {
+    generatedAt: r.generated_at,
+    windowHours: r.window_hours,
+    disclaimer: r.disclaimer,
+    counts: {
+      collected: r.counts?.collected ?? 0,
+      itemsRecent: r.counts?.items_recent ?? 0,
+      sourcesOk: r.counts?.sources_ok ?? 0,
+      sourcesFailed: r.counts?.sources_failed ?? 0,
+    },
+    issues: (r.issues ?? []).map(parseIssueEntry),
+  };
+}
+
+export async function fetchIssues(signal?: AbortSignal): Promise<IssuesData> {
+  const raw = await getJson<RawIssuesResponse>(issuesUrl(), signal);
+  return parseIssues(raw);
+}
+
+/** Fetch one ticker's full detail (for opening the drawer from an issue row). */
+export async function fetchTicker(
+  market: Market,
+  code: string,
+  signal?: AbortSignal,
+): Promise<ScoreEntry | null> {
+  const url = tickerUrl(market, code);
+  if (!url) return null;
+  try {
+    const raw = await getJson<RawScoreEntry>(url, signal);
+    return parseEntry(raw);
+  } catch {
+    return null;
+  }
 }

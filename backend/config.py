@@ -86,8 +86,36 @@ class Settings(BaseSettings):
     top_n_per_theme: int = Field(default=8, ge=1)
     themes_path: Path = DATA_DIR / "themes.yml"
 
+    # ── 뉴스·이슈 랭킹 (실시간 이슈 — RSS + 텔레그램 MTProto) ───────────
+    #: 이슈 랭킹 수집/산출 on/off. 끄면 /api/issues 는 빈 응답(비차단).
+    news_enabled: bool = True
+    #: 수집 소스 정의(운영자 편집형 YAML — RSS 피드 + 텔레그램 채널).
+    news_sources_path: Path = DATA_DIR / "news_sources.yml"
+    #: 뉴스 수집/산출 주기(분). 시장 시간과 무관하게 상시(뉴스는 장외에도 흐른다).
+    news_refresh_interval_min: int = Field(default=30, ge=1)
+    #: '지금 뜨는' 최근 윈도(시간) — 이 구간 언급수가 급등(spike) 분자.
+    news_recent_hours: int = Field(default=24, ge=1)
+    #: 베이스라인 윈도(일) — 동일 길이 환산 과거 평균이 급등 분모.
+    news_baseline_days: int = Field(default=7, ge=1)
+    #: 노이즈 차단 — 최근 윈도 언급이 이 값 미만이면 랭킹 제외(1회성 제거).
+    news_min_mentions: int = Field(default=2, ge=1)
+    #: 이슈 랭킹 상위 N.
+    news_max_issues: int = Field(default=30, ge=1)
+    #: 소스당 1회 수집 최대 항목수(과수집 방지).
+    news_per_source_limit: int = Field(default=50, ge=1)
+
+    # ── 텔레그램 MTProto (Telethon — 시크릿, .env) ─────────────────────
+    #: my.telegram.org 발급(env: TELEGRAM_API_ID/TELEGRAM_API_HASH). 0/빈값이면
+    #: 텔레그램 수집을 건너뛴다(RSS 만, fail-open).
+    telegram_api_id: int = 0
+    telegram_api_hash: str = ""
+    #: 사용자 세션 파일(시크릿 — .gitignore). 최초 1회 대화형 로그인으로 생성.
+    telegram_session_path: Path = DATA_DIR / ".telegram.session"
+
     # ── 영속 ───────────────────────────────────────────────────────────
     db_path: Path = DATA_DIR / "dashboard.db"
+    #: 뉴스 원시 아카이브 + 이슈 스냅샷 DB(별도 파일 — dashboard.db 캐시 초기화에도 보존).
+    news_db_path: Path = DATA_DIR / "news.db"
     #: KIS OAuth 토큰 디스크 캐시(시크릿 — .gitignore). 재시작·다중 프로세스 간 토큰 재사용.
     kis_token_path: Path = DATA_DIR / ".kis_token.json"
 

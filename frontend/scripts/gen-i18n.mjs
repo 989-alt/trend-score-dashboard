@@ -15,6 +15,7 @@ const ko = {
   "app.subtitle": "국장·미장 매수 추천도와 테마별 주도주를 한눈에",
 
   "tab.themes": "테마별 주도주",
+  "tab.issues": "실시간 이슈",
   "tab.kr": "국장 KR",
   "tab.us": "미장 US",
 
@@ -86,6 +87,13 @@ const ko = {
   "theme.leaders": "주도주",
   "theme.moreCount": "외 {n}종목",
   "theme.sellCount": "매도요구 {n}",
+
+  "issues.caption": "최근 {hours}시간 종목·테마 언급 급등 순",
+  "issues.empty":
+    "표시할 이슈가 없습니다. 수집된 뉴스가 적거나 매칭된 종목·테마가 없습니다.",
+  "issues.kind.theme": "테마",
+  "issues.mentions": "언급 {n}건",
+  "issues.spike.hint": "최근 언급수 ÷ 평소(베이스라인) 언급수 — 클수록 평소보다 급증.",
 
   "drawer.title": "종목 상세",
   "drawer.close": "닫기",
