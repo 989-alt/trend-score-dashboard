@@ -140,7 +140,7 @@ export function App() {
   const showError = !!active.error && !active.data;
 
   return (
-    <div className={styles.app}>
+    <div className={isNewsTab ? styles.app : `${styles.app} ${styles.appRailPad}`}>
       <DemoBanner />
       <div className={styles.container}>
         <Header
@@ -198,32 +198,29 @@ export function App() {
                 onSelectKey={setNewsIssueKey}
               />
             )
+          ) : showInitialLoading ? (
+            <LoadingView />
+          ) : showError ? (
+            <ErrorView onRetry={active.refresh} />
+          ) : isMarketTab ? (
+            <RankingTable
+              entries={snapshot.data?.entries ?? []}
+              onSelect={setSelected}
+            />
           ) : (
-            <div className={styles.withRail}>
-              <div className={styles.contentCol}>
-                {showInitialLoading ? (
-                  <LoadingView />
-                ) : showError ? (
-                  <ErrorView onRetry={active.refresh} />
-                ) : isMarketTab ? (
-                  <RankingTable
-                    entries={snapshot.data?.entries ?? []}
-                    onSelect={setSelected}
-                  />
-                ) : (
-                  <ThemeBoard
-                    themes={themes.data?.themes ?? []}
-                    onSelect={setSelected}
-                  />
-                )}
-              </div>
-              <IssueRail issues={news.data?.issues ?? []} onOpen={openIssue} />
-            </div>
+            <ThemeBoard
+              themes={themes.data?.themes ?? []}
+              onSelect={setSelected}
+            />
           )}
         </main>
 
         <Footer />
       </div>
+
+      {!isNewsTab && (
+        <IssueRail issues={news.data?.issues ?? []} onOpen={openIssue} />
+      )}
 
       <DetailDrawer entry={selected} onClose={() => setSelected(null)} />
     </div>
