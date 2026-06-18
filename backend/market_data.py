@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import threading
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -641,6 +642,13 @@ _PRICE_TTL = timedelta(seconds=30)
 _CACHE_OHLCV = "ohlcv"
 _CACHE_FUND = "fundamentals"
 _CACHE_INDEX = "index"
+_CACHE_UNIVERSE = "universe"
+#: 유니버스 캐시의 sentinel ticker — DailyCache 키를 재사용하되 종목이 아니라 시장 1행으로 둔다.
+_UNIVERSE_SENTINEL = "_UNIVERSE_"
+#: 네이버 금융 시가총액 순위(KRX MDC 비의존 enumeration). sosok: KOSPI=0/KOSDAQ=1, 페이지당 50종목.
+_NAVER_MARKET_SUM = "https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}"
+_NAVER_PAGE_SIZE = 50
+_NAVER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
 #: RS(지수대비 상대강도) 분모 지수 심볼(yfinance). KR=KOSPI, US=S&P500.
 #: pykrx 지수는 데이터센터 IP 에서 KRX 403 → 양 시장 모두 yfinance 로 일원화.
@@ -1098,58 +1106,76 @@ class LiveProvider:
     def list_universe(self, market: Market) -> list[str]:
         """'거래대금 상위 N 종목'(시장별) — 유동성 상위만 스캔해 속도 확보.
 
-        - KR: ``pykrx`` 벌크 1~2콜로 KOSPI∪KOSDAQ 전 종목 거래대금 → 상위 N 티커.
+        - KR: 네이버 금융 시가총액 순위(KRX 비의존)로 KOSPI∪KOSDAQ 상위 N 티커(일1회 캐시).
         - US: 유동성 큰 정적 화이트리스트(S&P 500 + 대형주)에서 상위 N(거래대금 순위
           무료 단일소스 부재 → 대형주 근사).
         - 둘 다 비면 ``_universe_from_themes`` 로 graceful fallback(운영자 큐레이션).
 
-        전 종목 조회는 무거우므로 인스턴스 1회만 수행하고 캐시한다.
+        전 종목 조회는 무거우므로 **성공 결과만** 인스턴스 캐시한다. 폴백(빈 결과)은
+        캐시하지 않아, FDR 일시 throttle 회복 시 다음 스캔이 자동으로 재시도·정상화한다.
         """
         if market in self._universe_cache:
             return self._universe_cache[market]
         fetched = self._fetch_universe_kr() if market == "KR" else self._fetch_universe_us()
-        result = fetched if fetched else _universe_from_themes(self._settings.themes_path, market)
-        self._universe_cache[market] = result
-        return result
+        if fetched:
+            self._universe_cache[market] = fetched
+            return fetched
+        # 폴백은 캐시 금지(고착 방지) — 다음 호출에 _fetch 재시도(디스크 캐시·소스 회복 활용).
+        return _universe_from_themes(self._settings.themes_path, market)
 
     def _fetch_universe_kr(self) -> list[str]:
-        """pykrx 벌크 조회로 거래대금 상위 N 티커. 실패 시 빈 리스트(→ themes fallback).
+        """네이버 시총 상위 N 티커 (일1회 디스크 캐시). 실패 시 빈 리스트(→ themes fallback).
 
-        KOSPI·KOSDAQ 각각 ``get_market_ohlcv_by_ticker`` 1콜(전 종목, '거래대금' 컬럼)로
-        받아 concat → '거래대금' 내림차순 → 상위 ``live_universe_top_n``. 데이터가 비면
-        직전 영업일로 1회 재시도한다. **개별 종목 루프 조회 금지(벌크만).**
+        pykrx·FDR 의 KRX(``data.krx.co.kr``) 소스가 throttle/차단으로 불안정 → **KRX 비의존**
+        네이버 금융 시가총액 순위로 enumeration. 오늘자 결과는 ``DailyCache`` 에 보관해
+        재시작·다중 호출에도 재요청 없음. 실패는 빈 리스트로 흡수 → themes.yml graceful degrade.
         """
+        today = _market_today("KR")
+        cached = self._daily.get("KR", _UNIVERSE_SENTINEL, today, _CACHE_UNIVERSE)
+        if cached:
+            loaded = json.loads(cached)
+            if isinstance(loaded, list) and loaded:
+                return [str(t) for t in loaded]
+        tickers = self._naver_universe_kr()
+        if tickers:
+            self._daily.put("KR", _UNIVERSE_SENTINEL, today, _CACHE_UNIVERSE, json.dumps(tickers))
+        return tickers
+
+    def _naver_universe_kr(self) -> list[str]:
+        """네이버 금융 시가총액 순위 → KOSPI∪KOSDAQ 상위 티커. 실패는 빈 리스트.
+
+        ``live_universe_top_n`` 을 KOSPI:KOSDAQ ≈ 2:1 로 배분(대형주 KOSPI 편중). 각 시장
+        시총 내림차순 페이지(50종목)에서 6자리 코드를 추출·중복 제거한다. 종목명은
+        pykrx(``_kr_name``)가 해석한다. 유동성은 점수 단계의 거래대금 하드필터가 거른다.
+        """
+        top_n = self._settings.live_universe_top_n
+        kospi_quota = top_n * 2 // 3
         try:
-            import pandas as pd  # lazy import
-            from pykrx import stock  # 미설치/ARM 미지원 환경 보호
-
-            bday = stock.get_nearest_business_day_in_a_week()
-            frame = self._kr_turnover_frame(stock, pd, bday)
-            if frame is None or frame.empty:
-                # 직전 영업일 재시도(휴장·데이터 지연 대비).
-                prev = stock.get_nearest_business_day_in_a_week(
-                    (datetime.now(tz=UTC) - timedelta(days=1)).strftime("%Y%m%d")
-                )
-                frame = self._kr_turnover_frame(stock, pd, prev)
-        except Exception:  # pykrx/pandas 임의 예외는 fallback 으로 흡수(graceful)
-            logger.warning("pykrx 유니버스 조회 실패 — themes.yml fallback", exc_info=True)
+            kospi = self._naver_market_codes(0, kospi_quota)
+            kosdaq = self._naver_market_codes(1, top_n - kospi_quota)
+        except (httpx.HTTPError, OSError):
+            logger.warning("네이버 유니버스 조회 실패 — themes.yml fallback", exc_info=True)
             return []
-        if frame is None or frame.empty:
-            return []
-        top = frame.sort_values("거래대금", ascending=False).head(
-            self._settings.live_universe_top_n
-        )
-        return _dedup(str(t).zfill(6) for t in top.index if str(t).strip())
+        return _dedup((*kospi, *kosdaq))
 
-    @staticmethod
-    def _kr_turnover_frame(stock: Any, pd: Any, bday: str) -> Any:
-        """KOSPI∪KOSDAQ 전 종목 거래대금 DataFrame(벌크 2콜). 데이터 비면 빈 프레임."""
-        kospi = stock.get_market_ohlcv_by_ticker(bday, market="KOSPI")
-        kosdaq = stock.get_market_ohlcv_by_ticker(bday, market="KOSDAQ")
-        frames = [f for f in (kospi, kosdaq) if f is not None and not f.empty and "거래대금" in f]
-        if not frames:
-            return None
-        return pd.concat(frames)
+    def _naver_market_codes(self, sosok: int, quota: int) -> list[str]:
+        """네이버 시총순위(``sosok``: KOSPI=0/KOSDAQ=1) 상위 ``quota`` 종목코드(6자리)."""
+        pages = -(-quota // _NAVER_PAGE_SIZE)  # ceil
+        seen: set[str] = set()
+        out: list[str] = []
+        for page in range(1, pages + 1):
+            text = self._naver_fetch(_NAVER_MARKET_SUM.format(sosok=sosok, page=page))
+            for code in re.findall(r"code=(\d{6})", text):
+                if code not in seen:
+                    seen.add(code)
+                    out.append(code)
+        return out[:quota]
+
+    def _naver_fetch(self, url: str) -> str:
+        """네이버 페이지 HTML(httpx). 실패는 예외 전파(상위가 흡수). 테스트 seam."""
+        resp = httpx.get(url, headers={"User-Agent": _NAVER_UA}, timeout=15.0)
+        resp.raise_for_status()
+        return resp.text
 
     def _fetch_universe_us(self) -> list[str]:
         """유동성 큰 정적 화이트리스트에서 상위 N(거래대금 상위 근사).

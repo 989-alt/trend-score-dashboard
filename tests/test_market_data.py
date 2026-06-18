@@ -502,7 +502,7 @@ def test_live_kis_quote_glitch_persists_raises(monkeypatch: pytest.MonkeyPatch) 
         lp.get_quote("005930", "KR")
 
 
-def test_live_universe_kr_pykrx_caches(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_live_universe_kr_caches(monkeypatch: pytest.MonkeyPatch) -> None:
     """KR 유니버스 = 거래대금 상위 N + 인스턴스 1회 캐시."""
     lp = _live()
     calls = {"n": 0}
@@ -519,43 +519,41 @@ def test_live_universe_kr_pykrx_caches(monkeypatch: pytest.MonkeyPatch) -> None:
     assert calls["n"] == 1  # 인스턴스 1회 캐시 → 2번째는 fetch 안 함
 
 
-def test_live_fetch_universe_kr_top_n_by_turnover(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``_fetch_universe_kr``: 벌크 거래대금 DataFrame → 내림차순 상위 N(6자리 zero-pad).
+def test_live_fetch_universe_kr_by_market_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``_fetch_universe_kr``: 네이버 시총순위(KOSPI:KOSDAQ≈2:1) → 6자리 코드 + 일1회 디스크 캐시.
 
-    pykrx/pandas 를 mock — 개별 종목 루프 없이 시장당 1콜(벌크)만 호출하는지 함께 검증.
+    네이버 페이지 fetch(``_naver_fetch``)를 mock — KOSPI 우선 합집합, 중복 제거, 그리고
+    2번째 호출이 네이버 재요청 없이 디스크 캐시로 처리되는지 함께 검증한다.
     """
-    pd = pytest.importorskip("pandas")
     lp = _live()
-    settings = lp._settings.model_copy(update={"live_universe_top_n": 3})
+    settings = lp._settings.model_copy(update={"live_universe_top_n": 6})  # KOSPI 4, KOSDAQ 2
     monkeypatch.setattr(lp, "_settings", settings)
 
-    bulk_calls = {"n": 0}
+    calls = {"n": 0}
 
-    class FakeStock:
-        @staticmethod
-        def get_nearest_business_day_in_a_week(*_a: object, **_k: object) -> str:
-            return "20250103"
+    def fake_fetch(url: str) -> str:
+        calls["n"] += 1
+        if "sosok=0" in url:  # KOSPI 시총 상위(코드 링크 형태)
+            return (
+                '<a href="/item/main.naver?code=005930">A</a>'
+                '<a href="/item/main.naver?code=000660">B</a>'
+                '<a href="/item/main.naver?code=035420">C</a>'
+                '<a href="/item/main.naver?code=005380">D</a>'
+            )
+        return (
+            '<a href="/item/main.naver?code=247540">E</a>'
+            '<a href="/item/main.naver?code=196170">F</a>'
+        )
 
-        @staticmethod
-        def get_market_ohlcv_by_ticker(_bday: str, market: str = "") -> object:
-            bulk_calls["n"] += 1
-            if market == "KOSPI":
-                return pd.DataFrame(
-                    {"거래대금": [900, 300]}, index=["5930", "5490"]
-                )  # zero-pad 검증용 5자리 인덱스
-            return pd.DataFrame({"거래대금": [800, 100]}, index=["247540", "035720"])
+    monkeypatch.setattr(lp, "_naver_fetch", fake_fetch)
 
-    # pykrx.stock 과 pandas import 를 가짜로 주입.
-    import sys
-
-    fake_pykrx = type(sys)("pykrx")
-    fake_pykrx.stock = FakeStock  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "pykrx", fake_pykrx)
-
-    tickers = lp._fetch_universe_kr()
-    # 거래대금 내림차순 상위 3: 5930(900)>247540(800)>5490(300). zero-pad 적용.
-    assert tickers == ["005930", "247540", "005490"]
-    assert bulk_calls["n"] == 2  # KOSPI·KOSDAQ 각 1콜(벌크) — 개별 루프 금지
+    uni = lp._fetch_universe_kr()
+    # KOSPI quota 4 + KOSDAQ quota 2, KOSPI 먼저(시총 순서 유지).
+    assert uni == ["005930", "000660", "035420", "005380", "247540", "196170"]
+    assert calls["n"] == 2  # KOSPI 1페이지 + KOSDAQ 1페이지(각 quota ≤ 50)
+    # 일1회 디스크 캐시 — 2번째 호출은 네이버 재요청 없음.
+    assert lp._fetch_universe_kr() == uni
+    assert calls["n"] == 2
 
 
 def test_live_universe_kr_fallback_to_themes(monkeypatch: pytest.MonkeyPatch) -> None:
