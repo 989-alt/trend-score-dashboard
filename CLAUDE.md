@@ -48,17 +48,21 @@
   (`data/.kis_token.json`).
 - **KR 일봉**: KIS `inquire-daily-itemchartprice`(FHKST03010100) — **호출당 ~100봉 cap → 윈도우
   페이지네이션**으로 280봉 누적. (단일 호출이면 MA200/1년수익률 None → 전종목 '회피' 오판별.)
+- **KR 유니버스**: **네이버 금융 시가총액 순위**(`finance.naver.com/sise/sise_market_sum`,
+  KOSPI:KOSDAQ≈2:1) 상위 `LIVE_UNIVERSE_TOP_N`(300). **pykrx·FDR 모두 KRX `data.krx.co.kr` 를
+  써서 throttle/차단(VPN 무관)→ KRX 비의존 네이버로 교체.** 일1회 `DailyCache`(kind=`universe`)
+  캐시 + 실패 시 themes.yml graceful fallback(≈42). 폴백은 인메모리 캐시 안 함(throttle 회복 시 자가복구).
 - **KR 종목명**: KIS 가 `hts_kor_isnm` 미제공(업종 `bstp_kor_isnm` 만) → **pykrx
-  `get_market_ticker_name`**(인스턴스 캐시).
+  `get_market_ticker_name`**(인스턴스 캐시; 종목명 엔드포인트는 살아있음).
 - **KR 투자자 매매금**: `*_tr_pbmn` 은 **백만원 단위 → ×1e6**. `output[0]`(최신일)은 미정산 빈값
   → 첫 정산행 사용.
 - **US 시세/펀더/일봉 + 지수**: **yfinance + curl_cffi `Session(impersonate="chrome")`** —
   데이터센터(OCI) IP 의 Yahoo 429 회피(필수; plain `requests` 면 US 전종목 실패). 일봉 일1회 캐시
   + `yf.download` 배치 + tenacity 백오프.
 - **지수(RS 분모)**: KR=KOSPI `^KS11`, US=S&P500 `^GSPC` (yfinance). **pykrx 지수는 데이터센터 IP
-  에서 KRX 403** → 지수는 yfinance 로 KR·US 일원화. (pykrx 종목 유니버스/일봉은 동작.)
+  에서 KRX 403** → 지수는 yfinance 로 KR·US 일원화. (KR 유니버스=네이버 시총, KR 일봉=KIS — 위 참조.)
 - US 유니버스: 정적 화이트리스트 상위 N(기본 30 — yfinance 429 회피).
-- 캐시: `DailyCache`(SQLite, key=market+ticker+오늘+kind). kind = `ohlcv`/`fundamentals`/`index`.
+- 캐시: `DailyCache`(SQLite, key=market+ticker+오늘+kind). kind = `ohlcv`/`fundamentals`/`index`/`universe`.
 
 ## 배포 (OCI Always Free + Caddy + Pages)
 
