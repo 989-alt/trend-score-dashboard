@@ -1,7 +1,7 @@
 .rail {
   position: fixed;
   top: 96px;
-  right: 100px;
+  left: calc(50% + 610px);
   width: 280px;
   max-height: calc(100vh - 120px);
   display: flex;
@@ -13,8 +13,8 @@
   z-index: 40;
 }
 
-/* 우측 거터를 비우는 넓은 화면(≥1500px)에서만 노출 — 그 이하선 콘텐츠와 겹쳐 숨김. */
-@media (max-width: 1499px) {
+/* 중앙(최대 1180) 콘텐츠 오른쪽에 붙여 고정. 레일 폭이 확보되는 넓은 화면에서만 노출. */
+@media (max-width: 1799px) {
   .rail {
     display: none;
   }
