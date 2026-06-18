@@ -72,6 +72,39 @@ class Settings(BaseSettings):
     weight_turnover: Decimal = Decimal("0.15")
     weight_vol_fit: Decimal = Decimal("0.10")
 
+    # ── entry_bias 프리셋 파라미터 (백테스트 전용, 라이브 스코어러 미사용) ──────
+    # NOTE: 아래 값은 사전(prior)이며, 실제 백테스트 튜닝 후 조정 예정.
+    #       라이브 score_candidates() 는 이 필드를 참조하지 않는다.
+
+    # extension_guard: MA 이격도 페널티
+    ext_guard_ma_window: int = 20  # 이격도 기준 MA 일수
+    ext_guard_lo: Decimal = Decimal("0.05")  # 이격도 하한(이하 → 페널티 없음)
+    ext_guard_hi: Decimal = Decimal("0.30")  # 이격도 상한(이상 → 최대 페널티)
+    ext_guard_floor: Decimal = Decimal("0.5")  # 최대 페널티 시 승수(0 < floor ≤ 1)
+
+    # pullback_3pos: MA 지지 위 눌림목 보너스
+    pullback_ma_window: int = 20  # 지지선 MA 일수
+    pullback_high_window: int = 60  # 최근 고점 탐색 윈도(봉)
+    pullback_ideal: Decimal = Decimal("0.08")  # 이상적 눌림목 깊이(8%)
+    pullback_max: Decimal = Decimal("0.20")  # 허용 최대 눌림목 깊이(20%)
+
+    # entry_bias 리웨이트 — near_52w 를 0.30→0.18 로 축소, 남은 0.12 를 pullback 배분
+    # (기존 weight_52w 는 라이브 스코어러가 사용; entry_bias 는 이 별도 가중치를 사용)
+    weight_52w_entry: Decimal = Decimal("0.18")  # entry_bias: near_52w 가중치
+    weight_pullback: Decimal = Decimal("0.12")  # entry_bias: pullback_3pos 가중치
+
+    # ── fallback_c 프리셋 파라미터 (백테스트 전용, 라이브 미사용) ──────────
+    # 레이어1: near_52w 가중치 후보(스윕: 0.30/0.20/0.12). 남은 (0.30 - w) 를 pullback 에 배분.
+    weight_52w_fallback: Decimal = Decimal("0.18")
+    # 레이어2 레짐 게이트
+    regime_window: int = 25
+    regime_threshold: int = 5
+    regime_drop: Decimal = Decimal("0.998")
+    # 레이어2 ATR 손절·사이징
+    atr_stop_mult: Decimal = Decimal("2")  # 손절 = 진입 − mult×ATR20
+    risk_pct: Decimal = Decimal("0.01")  # 트레이드당 위험 R%(자본 1%)
+    max_weight_pct: Decimal = Decimal("0.10")  # 포지션 비중 상한
+
     # ── 손절(트레일링) ────────────────────────────────────────────────
     trailing_stop_pct: Decimal = Decimal("8")
     #: 트레일링 peak 추적 윈도(일). 무상태 손절 — 최근 N봉 종가 ∪ 현재가의 최고가.

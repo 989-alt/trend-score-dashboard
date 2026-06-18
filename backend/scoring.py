@@ -118,6 +118,119 @@ def pocket_pivot(rows: list[OHLCVRow], *, lookback: int = 10) -> bool:
     return today.volume > max_down_vol
 
 
+def trend_template(rows: list[OHLCVRow]) -> Decimal:
+    """Minervini 8조건 충족수/8 (0~1). 데이터 부족 조건은 미충족 처리."""
+    if len(rows) < 200:
+        return Decimal("0")
+    p = rows[-1].close
+    ma50 = simple_moving_average(rows, 50)
+    ma150 = simple_moving_average(rows, 150)
+    ma200 = simple_moving_average(rows, 200)
+    ma200_prev = simple_moving_average(rows[:-21], 200) if len(rows) > 221 else None
+    lo252 = min(r.low for r in rows[-252:])
+    hi252 = max(r.high for r in rows[-252:])
+    conds = [
+        ma150 is not None and ma200 is not None and p > ma150 and p > ma200,
+        ma150 is not None and ma200 is not None and ma150 > ma200,
+        ma200 is not None and ma200_prev is not None and ma200 > ma200_prev,
+        ma50 is not None and ma150 is not None and ma200 is not None and ma50 > ma150 > ma200,
+        ma50 is not None and p > ma50,
+        p >= Decimal("1.30") * lo252,
+        p >= Decimal("0.75") * hi252,
+        True,  # RS≥70 은 횡단면 — 합성 단계에서 rs_rank 로 대체(여기선 8번째 자리표시)
+    ]
+    return Decimal(sum(1 for c in conds if c)) / Decimal("8")
+
+
+def ma_alignment(rows: list[OHLCVRow]) -> Decimal:
+    """이동평균 정배열 충족수/4 (0~1). MA 부족(None) 조건은 미충족 처리.
+
+    조건: ``[p > ma50, ma50 > ma150, ma150 > ma200, p > ma200]``. 완전 정배열
+    (P>MA50>MA150>MA200)이면 넷 다 참 → 1.0.
+    """
+    p = rows[-1].close
+    ma50 = simple_moving_average(rows, 50)
+    ma150 = simple_moving_average(rows, 150)
+    ma200 = simple_moving_average(rows, 200)
+    conds = [
+        ma50 is not None and p > ma50,
+        ma50 is not None and ma150 is not None and ma50 > ma150,
+        ma150 is not None and ma200 is not None and ma150 > ma200,
+        ma200 is not None and p > ma200,
+    ]
+    return Decimal(sum(1 for c in conds if c)) / Decimal("4")
+
+
+def mom_12_1(rows: list[OHLCVRow]) -> Decimal:
+    """12개월−1개월 모멘텀. 데이터(<252봉) 부족 또는 기준가 0 이면 ``Decimal("0")``.
+
+    ``c_then = rows[-252].close``, ``c_recent = rows[-21].close`` →
+    ``c_recent / c_then − 1``. 최근 1개월은 단기 반전 노이즈라 제외한다.
+    """
+    if len(rows) < 252:
+        return Decimal("0")
+    c_then = rows[-252].close
+    c_recent = rows[-21].close
+    if c_then == 0:
+        return Decimal("0")
+    return c_recent / c_then - Decimal("1")
+
+
+def volume_surge(rows: list[OHLCVRow]) -> Decimal:
+    """당일 거래량 급증도 ``clamp((vol[-1]/SMA(vol,20) − 1)/2, 0, 1)``.
+
+    SMA(vol,20)은 최근 20봉 ``volume`` 평균(종가 아님 — 직접 계산). 데이터(<20봉)
+    부족 또는 20일 거래량 평균 0 이면 ``Decimal("0")``. 결과는 ``[0,1]`` 클램프.
+    """
+    if len(rows) < 20:
+        return Decimal("0")
+    vols = [r.volume for r in rows[-20:]]
+    avg = sum(vols, Decimal("0")) / Decimal("20")
+    if avg == 0:
+        return Decimal("0")
+    raw = (rows[-1].volume / avg - Decimal("1")) / Decimal("2")
+    return max(Decimal("0"), min(Decimal("1"), raw))
+
+
+def atr20_over_price(rows: list[OHLCVRow]) -> Decimal:
+    """원시 ATR20 / 현재가 (정규화 없음 — 횡단면 정규화는 합성 단계).
+
+    True Range(i≥1) = ``max(high−low, |high−close_prev|, |low−close_prev|)``.
+    ATR20 = 최근 20개 TR 단순평균(20개 TR 위해 ≥21봉 필요). 데이터(<21봉) 부족 또는
+    현재가 0 이면 ``Decimal("0")``.
+    """
+    if len(rows) < 21:
+        return Decimal("0")
+    trs: list[Decimal] = []
+    for prev, curr in pairwise(rows[-21:]):
+        tr = max(
+            curr.high - curr.low,
+            abs(curr.high - prev.close),
+            abs(curr.low - prev.close),
+        )
+        trs.append(tr)
+    atr20 = sum(trs, Decimal("0")) / Decimal("20")
+    price = rows[-1].close
+    if price == 0:
+        return Decimal("0")
+    return atr20 / price
+
+
+def vol_dryup(rows: list[OHLCVRow]) -> Decimal:
+    """거래량 마름 프록시 ``SMA(vol,5) / SMA(vol,50)`` (원시값).
+
+    데이터(<50봉) 부족 또는 50일 거래량 평균 0 이면 ``Decimal("0")``. 최근 거래량이
+    장기 평균보다 잦아들면(눌림목 건조) <1.
+    """
+    if len(rows) < 50:
+        return Decimal("0")
+    sma5 = sum((r.volume for r in rows[-5:]), Decimal("0")) / Decimal("5")
+    sma50 = sum((r.volume for r in rows[-50:]), Decimal("0")) / Decimal("50")
+    if sma50 == 0:
+        return Decimal("0")
+    return sma5 / sma50
+
+
 def volatility_fit(value: Decimal, low: Decimal, high: Decimal) -> Decimal:
     """변동성 밴드 적합도 — 삼각형 gradient. 밴드 중심 1.0, 양 끝/밖 0.0."""
     if value < low or value > high:
@@ -289,6 +402,107 @@ def score_candidates(
     return result
 
 
+def compute_extension_guard(rows: list[OHLCVRow], settings: Settings) -> Decimal:
+    """과도 이격 패널티 승수(0 < 결과 ≤ 1).
+
+    주가가 이동평균 대비 지나치게 많이 이격되면 점수에 페널티를 부여해
+    고점 추격(over-extension)을 억제한다.
+
+    - 이격도 ext = (close - MA) / MA  (음수면 MA 아래)
+    - ext ≤ ext_guard_lo               → 1.0 (페널티 없음)
+    - ext ≥ ext_guard_hi               → ext_guard_floor (최대 페널티)
+    - 그 사이                          → 1.0 에서 ext_guard_floor 로 선형 보간
+    - 데이터 부족(MA 계산 불가)         → 1.0 (페널티 없음)
+
+    Decimal 전용. math 보조는 불필요(선형 보간).
+    """
+    ma = simple_moving_average(rows, settings.ext_guard_ma_window)
+    if ma is None or ma == 0:
+        return Decimal("1")
+    ext = (rows[-1].close - ma) / ma
+    lo = settings.ext_guard_lo
+    hi = settings.ext_guard_hi
+    floor = settings.ext_guard_floor
+    if ext <= lo:
+        return Decimal("1")
+    if ext >= hi:
+        return floor
+    # 선형 보간: 1.0 at lo → floor at hi
+    span = hi - lo
+    t_val = (ext - lo) / span  # 0~1 ∈ [lo,hi]
+    return Decimal("1") - t_val * (Decimal("1") - floor)
+
+
+def compute_pullback_3pos(rows: list[OHLCVRow], settings: Settings) -> Decimal:
+    """MA 지지 위에서의 적절한 눌림목 보너스(0~1).
+
+    추세주의 '3단계 매수' 개념: MA 위에 있으면서, 최근 고점 대비 적당히
+    조정(pullback)된 종목에 높은 점수를 준다. 너무 고점에 있거나 너무 많이
+    빠진 종목은 0에 가깝다.
+
+    - MA 를 하회하면 → 0 (지지선 붕괴)
+    - 최근 고점 대비 depth = (recent_high - close) / recent_high
+    - depth 에 대한 삼각형(triangular) 보상:
+        0  at depth=0      (고점 = 눌림목 없음 = 과매수 구간)
+        1  at depth=pullback_ideal  (이상적 눌림목 깊이, 예: 8%)
+        0  at depth=pullback_max   (최대 허용 깊이, 예: 20%)
+        depth > pullback_max → 0 (너무 많이 빠짐 = 추세 이탈 가능)
+    - 데이터 부족 → 0
+
+    Decimal 전용.
+    """
+    ma = simple_moving_average(rows, settings.pullback_ma_window)
+    if ma is None:
+        return Decimal("0")
+    close = rows[-1].close
+    if close < ma:
+        return Decimal("0")  # MA 지지 붕괴 — 3포지션 셋업 아님
+
+    # 최근 pullback_high_window 봉 고가
+    window_rows = rows[-settings.pullback_high_window :]
+    recent_high = max(r.high for r in window_rows)
+    if recent_high <= 0:
+        return Decimal("0")
+
+    depth = (recent_high - close) / recent_high  # 0 = 고점, 양수 = 눌림
+
+    ideal = settings.pullback_ideal
+    max_pb = settings.pullback_max
+
+    if depth <= Decimal("0"):
+        return Decimal("0")  # 고점 돌파 또는 신고가
+    if depth >= max_pb:
+        return Decimal("0")  # 너무 많이 빠짐
+    if depth <= ideal:
+        # 0 → 1 선형 상승 (0 at depth=0, 1 at depth=ideal)
+        return depth / ideal
+    else:
+        # 1 → 0 선형 하락 (1 at depth=ideal, 0 at depth=max)
+        span = max_pb - ideal
+        if span <= 0:
+            return Decimal("0")
+        return (max_pb - depth) / span
+
+
+def atr_stop_price(entry: Decimal, atr: Decimal, *, mult: Decimal = Decimal("2")) -> Decimal:
+    """ATR 손절가 = max(0, entry − mult×atr)."""
+    return max(Decimal("0"), entry - mult * atr)
+
+
+def suggested_weight(
+    atr_over_price: Decimal,
+    *,
+    risk_pct: Decimal = Decimal("0.01"),
+    mult: Decimal = Decimal("2"),
+    cap: Decimal = Decimal("0.10"),
+) -> Decimal:
+    """포지션 비중 = risk_pct / (mult × atr/price), [0, cap] 클램프. atr/price≤0 이면 0."""
+    denom = mult * atr_over_price
+    if denom <= 0:
+        return Decimal("0")
+    return max(Decimal("0"), min(cap, risk_pct / denom))
+
+
 def grade_for_score(score_100: Decimal, settings: Settings) -> Grade:
     """0~100 점수 → 등급.
 
@@ -312,16 +526,26 @@ __all__ = [
     "Candidate",
     "FactorBounds",
     "above_ma200",
+    "atr20_over_price",
+    "atr_stop_price",
     "compute_annualized_volatility",
+    "compute_extension_guard",
     "compute_momentum",
+    "compute_pullback_3pos",
     "factor_bounds",
     "grade_for_score",
     "linear_position",
+    "ma_alignment",
     "min_max_norm",
+    "mom_12_1",
     "passes_hard_filter",
     "pocket_pivot",
     "proximity_to_52w_high",
     "score_candidates",
     "simple_moving_average",
+    "suggested_weight",
+    "trend_template",
+    "vol_dryup",
     "volatility_fit",
+    "volume_surge",
 ]

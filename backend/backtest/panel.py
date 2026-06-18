@@ -17,6 +17,7 @@ class AsOfFundamentals:
     roe: Decimal | None = None
     op_margin: Decimal | None = None
     rev_growth: Decimal | None = None
+    gp: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,7 @@ class Panel:
     fundamentals: dict[str, list[AsOfFundamentals]]
     listings: dict[str, tuple[date, date | None]]
     index_rows: list[OHLCVRow]
+    market: str = "KR"
 
     def rows_asof(self, ticker: str, t: date) -> list[OHLCVRow]:
         s = self.series.get(ticker)

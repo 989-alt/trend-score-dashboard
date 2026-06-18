@@ -56,3 +56,48 @@ def test_ratios_for_filing_parses_period(monkeypatch) -> None:
     assert out["roe"] == Decimal("0.1")
     # 정기보고서 아님 → 빈 dict(fail-open)
     assert client.ratios_for_filing("X", {"report_nm": "주요사항보고서"}) == {}
+
+
+def test_all_listed_codes_returns_six_digit_codes(monkeypatch) -> None:
+    from backend.backtest.dart_client import DartClient
+
+    c = DartClient("k")
+    monkeypatch.setattr(c, "_load_corp_map", lambda: {"005930": "00126380", "000660": "00164779"})
+    c._corp_map = None
+    codes = c.all_listed_codes()
+    assert "005930" in codes and all(len(x) == 6 for x in codes)
+
+
+def test_ratios_gp_computed() -> None:
+    """매출액·매출원가·자산총계 있으면 gp = (매출액 - 매출원가) / 자산총계."""
+    accounts = [
+        {"account_nm": "당기순이익", "thstrm_amount": "1,200", "frmtrm_amount": "1,000"},
+        {"account_nm": "자본총계", "thstrm_amount": "10,000", "frmtrm_amount": "9,000"},
+        {"account_nm": "영업이익", "thstrm_amount": "1,500", "frmtrm_amount": "1,300"},
+        {"account_nm": "매출액", "thstrm_amount": "20,000", "frmtrm_amount": "18,000"},
+        {"account_nm": "매출원가", "thstrm_amount": "12,000", "frmtrm_amount": "11,000"},
+        {"account_nm": "자산총계", "thstrm_amount": "50,000", "frmtrm_amount": "45,000"},
+    ]
+    r = _ratios_from_accounts(accounts)
+    expected = (Decimal("20000") - Decimal("12000")) / Decimal("50000")
+    assert r["gp"] == expected
+
+
+def test_ratios_gp_missing_cogs() -> None:
+    """매출원가 없으면 gp 키 자체가 없어야 한다(fail-open, 크래시 없음)."""
+    accounts = [
+        {"account_nm": "매출액", "thstrm_amount": "20,000", "frmtrm_amount": "18,000"},
+        {"account_nm": "자산총계", "thstrm_amount": "50,000", "frmtrm_amount": "45,000"},
+    ]
+    r = _ratios_from_accounts(accounts)
+    assert "gp" not in r
+
+
+def test_ratios_gp_missing_assets() -> None:
+    """자산총계 없으면 gp 키 자체가 없어야 한다(fail-open, 크래시 없음)."""
+    accounts = [
+        {"account_nm": "매출액", "thstrm_amount": "20,000", "frmtrm_amount": "18,000"},
+        {"account_nm": "매출원가", "thstrm_amount": "12,000", "frmtrm_amount": "11,000"},
+    ]
+    r = _ratios_from_accounts(accounts)
+    assert "gp" not in r

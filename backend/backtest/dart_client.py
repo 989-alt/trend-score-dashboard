@@ -58,12 +58,16 @@ def _ratios_from_accounts(accounts: list[dict[str, Any]]) -> dict[str, Decimal]:
     op = _account(accounts, "영업이익", "thstrm_amount")
     rev = _account(accounts, "매출액", "thstrm_amount")
     rev_prev = _account(accounts, "매출액", "frmtrm_amount")
+    cogs = _account(accounts, "매출원가", "thstrm_amount")
+    assets = _account(accounts, "자산총계", "thstrm_amount")
     if ni is not None and eq and eq != 0:
         out["roe"] = ni / eq
     if op is not None and rev and rev != 0:
         out["op_margin"] = op / rev
     if rev is not None and rev_prev and rev_prev != 0:
         out["rev_growth"] = rev / rev_prev - Decimal("1")
+    if rev is not None and cogs is not None and assets and assets != 0:
+        out["gp"] = (rev - cogs) / assets
     return out
 
 
@@ -77,6 +81,12 @@ class DartClient:
         if self._corp_map is None:
             self._corp_map = self._load_corp_map()
         return self._corp_map.get(ticker)
+
+    def all_listed_codes(self) -> list[str]:
+        """corpCode.xml 의 6자리 종목코드 전체(상장사 근사). 캐시 재사용."""
+        if self._corp_map is None:
+            self._corp_map = self._load_corp_map()
+        return sorted(self._corp_map.keys())
 
     def _load_corp_map(self) -> dict[str, str]:
         r = self._http.get(f"{_BASE}/corpCode.xml", params={"crtfc_key": self._key})
