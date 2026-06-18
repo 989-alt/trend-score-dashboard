@@ -17,6 +17,7 @@ const ko = {
   "tab.themes": "테마별 주도주",
   "tab.kr": "국장 KR",
   "tab.us": "미장 US",
+  "tab.news": "시황",
 
   "market.open": "장중",
   "market.closed": "마감",
@@ -195,6 +196,21 @@ const ko = {
   "state.error.hint": "백엔드가 실행 중인지 확인하세요. 잠시 후 자동으로 다시 시도합니다.",
   "state.retry": "다시 시도",
   "state.empty": "데이터가 없습니다.",
+
+  "news.title": "실시간 시황 이슈",
+  "news.disclaimer":
+    "아래 이슈는 텔레그램·뉴스에서 자동 집계한 비검증 신호이며, 매수 점수에 반영되지 않습니다.",
+  "news.sidebar.title": "긴급 이슈 Top 10",
+  "news.urgency": "긴급도",
+  "news.severity": "심각도",
+  "news.issue.count": "{n}건",
+  "news.issue.channels": "{n}개 채널",
+  "news.empty": "최근 48시간 집계된 이슈가 없습니다.",
+  "news.detail.hint": "이슈를 선택하면 관련 원문이 표시됩니다.",
+  "news.openLink": "원문 열기",
+  "news.weekly.title": "주간 시황 요약",
+  "news.weekly.empty": "이번 주 요약이 아직 생성되지 않았습니다.",
+  "news.weekly.source": "FactSet·텔레그램 기반 · 토요일 갱신",
 
   "footer.disclaimer":
     "본 대시보드는 투자 자문에 해당하지 않으며, 투자의 판단과 결정은 철저히 개인에게 있습니다.",

@@ -1,7 +1,7 @@
 import { useT } from "../i18n";
 import styles from "./MarketTabs.module.css";
 
-export type TabKey = "themes" | "kr" | "us";
+export type TabKey = "themes" | "kr" | "us" | "news";
 
 interface Props {
   active: TabKey;
@@ -12,6 +12,7 @@ const TABS: { key: TabKey; labelKey: string }[] = [
   { key: "themes", labelKey: "tab.themes" },
   { key: "kr", labelKey: "tab.kr" },
   { key: "us", labelKey: "tab.us" },
+  { key: "news", labelKey: "tab.news" },
 ];
 
 /** DOM id for a tab button — referenced by the panel's `aria-labelledby`. */

@@ -220,3 +220,68 @@ export interface ThemesData {
   disclaimer: string;
   themes: MergedTheme[];
 }
+
+// ── 시황(뉴스) 탭 ────────────────────────────────────────────────────────
+// Raw shapes (API JSON; Decimal 은 string 으로 올 수 있음).
+export interface RawNewsMessage {
+  channel: string;
+  ts_kst: string;
+  text: string;
+  urls: string[];
+}
+
+export interface RawNewsIssue {
+  key: string;
+  title: string;
+  urgency: number | string;
+  channels: string[];
+  severity: number | string;
+  count: number;
+  last_ts: string;
+  messages: RawNewsMessage[];
+}
+
+export interface RawNewsIssuesResponse {
+  generated_at: string;
+  disclaimer: string;
+  issues: RawNewsIssue[];
+}
+
+export interface RawWeeklyResponse {
+  week_start: string | null;
+  kr_markdown: string | null;
+  generated_at: string | null;
+  disclaimer: string;
+}
+
+// Normalized shapes (consumed by components).
+export interface NewsMessage {
+  channel: string;
+  tsKst: string;
+  text: string;
+  urls: string[];
+}
+
+export interface NewsIssue {
+  key: string;
+  title: string;
+  urgency: number;
+  channels: string[];
+  severity: number;
+  count: number;
+  lastTs: string;
+  messages: NewsMessage[];
+}
+
+export interface NewsIssuesData {
+  generatedAt: string;
+  disclaimer: string;
+  issues: NewsIssue[];
+}
+
+export interface WeeklyData {
+  weekStart: string | null;
+  krMarkdown: string | null;
+  generatedAt: string | null;
+  disclaimer: string;
+}

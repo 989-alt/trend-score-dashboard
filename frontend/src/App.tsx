@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { fetchSnapshot, fetchThemes } from "./api";
+import { fetchNewsIssues, fetchNewsWeekly, fetchSnapshot, fetchThemes } from "./api";
 import type { Market, ScoreEntry } from "./types";
 import { usePolling } from "./hooks/usePolling";
 import { DemoBanner } from "./components/DemoBanner";
@@ -13,6 +13,7 @@ import {
 import { EntryLane } from "./components/EntryLane";
 import { RankingTable } from "./components/RankingTable";
 import { ThemeBoard } from "./components/ThemeBoard";
+import { NewsView } from "./components/NewsView";
 import { DetailDrawer } from "./components/drawer/DetailDrawer";
 import { CountsStrip } from "./components/CountsStrip";
 import { Footer } from "./components/Footer";
@@ -35,6 +36,7 @@ export function App() {
 
   const market = tabToMarket(tab);
   const isMarketTab = market !== null;
+  const isNewsTab = tab === "news";
 
   // Snapshot poll — enabled only on KR/US tabs, keyed by market.
   const snapshotFetcher = useCallback(
@@ -53,10 +55,22 @@ export function App() {
   );
   const themes = usePolling(themesFetcher, ["themes"], {
     intervalMs: POLL_MS,
-    enabled: !isMarketTab,
+    enabled: tab === "themes",
   });
 
-  const active = isMarketTab ? snapshot : themes;
+  // News polls — enabled only on the situation tab. Weekly summary polls slowly.
+  const newsFetcher = useCallback((signal: AbortSignal) => fetchNewsIssues(signal), []);
+  const news = usePolling(newsFetcher, ["news"], {
+    intervalMs: POLL_MS,
+    enabled: isNewsTab,
+  });
+  const weeklyFetcher = useCallback((signal: AbortSignal) => fetchNewsWeekly(signal), []);
+  const weekly = usePolling(weeklyFetcher, ["weekly"], {
+    intervalMs: 5 * 60_000,
+    enabled: isNewsTab,
+  });
+
+  const active = isMarketTab ? snapshot : isNewsTab ? news : themes;
 
   // Header indicators derived from whichever resource is active.
   const marketOpen: boolean | null = useMemo(() => {
@@ -118,22 +132,26 @@ export function App() {
 
         <MarketTabs active={tab} onChange={setTab} />
 
-        <EntryLane
-          variant="buy"
-          entries={buyEntries}
-          title={t("buyLane.title")}
-          desc={t("buyLane.desc")}
-          icon="▲"
-          onSelect={setSelected}
-        />
-        <EntryLane
-          variant="sell"
-          entries={sellEntries}
-          title={t("sellAlert.lane.title")}
-          desc={t("sellAlert.lane.desc")}
-          icon="⚠"
-          onSelect={setSelected}
-        />
+        {!isNewsTab && (
+          <>
+            <EntryLane
+              variant="buy"
+              entries={buyEntries}
+              title={t("buyLane.title")}
+              desc={t("buyLane.desc")}
+              icon="▲"
+              onSelect={setSelected}
+            />
+            <EntryLane
+              variant="sell"
+              entries={sellEntries}
+              title={t("sellAlert.lane.title")}
+              desc={t("sellAlert.lane.desc")}
+              icon="⚠"
+              onSelect={setSelected}
+            />
+          </>
+        )}
 
         {isMarketTab && snapshot.data && (
           <CountsStrip counts={snapshot.data.counts} />
@@ -154,6 +172,8 @@ export function App() {
               entries={snapshot.data?.entries ?? []}
               onSelect={setSelected}
             />
+          ) : isNewsTab ? (
+            <NewsView data={news.data} weekly={weekly.data} />
           ) : (
             <ThemeBoard
               themes={themes.data?.themes ?? []}

@@ -3,14 +3,20 @@ import type {
   InvestorFlow,
   Market,
   MergedTheme,
+  NewsIssue,
+  NewsIssuesData,
   RawFactorBreakdown,
   RawInvestorFlow,
+  RawNewsIssue,
+  RawNewsIssuesResponse,
   RawScoreEntry,
   RawSnapshot,
   RawThemesResponse,
+  RawWeeklyResponse,
   ScoreEntry,
   Snapshot,
   ThemesData,
+  WeeklyData,
 } from "./types";
 
 /**
@@ -183,4 +189,53 @@ export async function fetchSnapshot(
 export async function fetchThemes(signal?: AbortSignal): Promise<ThemesData> {
   const raw = await getJson<RawThemesResponse>(themesUrl(), signal);
   return parseThemes(raw);
+}
+
+function newsIssuesUrl(): string {
+  if (API_BASE) return `${API_BASE}/api/news/issues`;
+  if (STATIC_DEMO) return `${BASE}data/news-issues.json`;
+  return "/api/news/issues";
+}
+
+function newsWeeklyUrl(): string {
+  if (API_BASE) return `${API_BASE}/api/news/weekly`;
+  if (STATIC_DEMO) return `${BASE}data/news-weekly.json`;
+  return "/api/news/weekly";
+}
+
+function parseNewsIssue(r: RawNewsIssue): NewsIssue {
+  return {
+    key: r.key,
+    title: r.title,
+    urgency: toNum(r.urgency) ?? 0,
+    channels: Array.isArray(r.channels) ? r.channels : [],
+    severity: toNum(r.severity) ?? 0,
+    count: r.count,
+    lastTs: r.last_ts,
+    messages: (r.messages ?? []).map((m) => ({
+      channel: m.channel,
+      tsKst: m.ts_kst,
+      text: m.text,
+      urls: Array.isArray(m.urls) ? m.urls : [],
+    })),
+  };
+}
+
+export async function fetchNewsIssues(signal?: AbortSignal): Promise<NewsIssuesData> {
+  const raw = await getJson<RawNewsIssuesResponse>(newsIssuesUrl(), signal);
+  return {
+    generatedAt: raw.generated_at,
+    disclaimer: raw.disclaimer,
+    issues: (raw.issues ?? []).map(parseNewsIssue),
+  };
+}
+
+export async function fetchNewsWeekly(signal?: AbortSignal): Promise<WeeklyData> {
+  const raw = await getJson<RawWeeklyResponse>(newsWeeklyUrl(), signal);
+  return {
+    weekStart: raw.week_start,
+    krMarkdown: raw.kr_markdown,
+    generatedAt: raw.generated_at,
+    disclaimer: raw.disclaimer,
+  };
 }
