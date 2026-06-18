@@ -3,7 +3,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from backend.news.issues import StockMeta, build_issues, clean_text, load_severity
+from backend.news.issues import (
+    Issue,
+    StockMeta,
+    build_issues,
+    clean_text,
+    group_by_layer,
+    load_severity,
+)
 from backend.news.models import RawNewsItem
 
 _NOW = datetime(2026, 6, 18, 12, 0, tzinfo=UTC)
@@ -104,3 +111,27 @@ def test_stock_meta_attaches_score_only_for_stock_keys() -> None:
     assert stock.market == "KR"
     sev = next(i for i in issues if i.key == "서킷브레이커")
     assert sev.ticker is None and sev.score is None  # 심각도어 이슈엔 점수 없음
+
+
+# ── 3-레이어 그룹핑 ───────────────────────────────────────────────────────────
+
+
+def test_group_by_layer_splits_and_caps() -> None:
+    def _iss(key: str, market: str | None) -> Issue:
+        return Issue(
+            key=key,
+            title=key,
+            urgency=Decimal("5"),
+            channels=("c",),
+            severity=Decimal("0"),
+            count=1,
+            last_ts=_NOW,
+            items=(),
+            market=market,
+        )
+
+    issues = [_iss("삼성", "KR"), _iss("NVDA", "US"), _iss("급락", None), _iss("000660", "KR")]
+    layers = group_by_layer(issues, top_n=1)
+    assert [i.key for i in layers["domestic"]] == ["삼성"]  # KR, top_n=1 캡
+    assert [i.key for i in layers["us"]] == ["NVDA"]
+    assert [i.key for i in layers["macro"]] == ["급락"]

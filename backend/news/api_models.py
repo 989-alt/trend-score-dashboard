@@ -38,14 +38,17 @@ class NewsIssue(BaseModel):
     score: Decimal | None = None
     grade: str | None = None
     market: str | None = None
+    headline: str = ""  # 정리된 대표 한 줄(가독성)
 
 
 class NewsIssuesResponse(BaseModel):
-    """``GET /api/news/issues`` 응답 — Top N 이슈 + 면책."""
+    """``GET /api/news/issues`` 응답 — 3 레이어(국내/미국/종합) 각 Top N + 면책."""
 
     generated_at: datetime
     disclaimer: str
-    issues: list[NewsIssue]
+    domestic: list[NewsIssue]
+    us: list[NewsIssue]
+    macro: list[NewsIssue]
 
 
 class WeeklyResponse(BaseModel):

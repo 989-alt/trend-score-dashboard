@@ -16,14 +16,6 @@
   min-height: 240px;
 }
 
-/* 테마/국장/미장 탭: 긴급 이슈 레일을 뷰포트 우측에 고정(스크롤 따라옴, IssueRail.module.css).
-   넓은 화면(≥1500px)에서만 우측 거터를 비워 고정 레일과 콘텐츠가 겹치지 않게 한다. */
-@media (min-width: 1500px) {
-  .appRailPad {
-    padding-right: 400px;
-  }
-}
-
 @media (max-width: 640px) {
   .container {
     padding: 14px 12px 20px;

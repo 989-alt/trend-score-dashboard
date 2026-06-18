@@ -1,7 +1,7 @@
 .rail {
   position: fixed;
   top: 96px;
-  right: 100px;
+  left: calc(50% + 610px);
   width: 280px;
   max-height: calc(100vh - 120px);
   display: flex;
@@ -14,7 +14,8 @@
 }
 
 /* 우측 거터를 비우는 넓은 화면(≥1500px)에서만 노출 — 그 이하선 콘텐츠와 겹쳐 숨김. */
-@media (max-width: 1499px) {
+/* 중앙(최대 1180) 콘텐츠 오른쪽에 붙여 고정. 레일 폭이 확보되는 넓은 화면에서만 노출. */
+@media (max-width: 1799px) {
   .rail {
     display: none;
   }
@@ -28,6 +29,31 @@
   color: var(--text-muted);
   border-bottom: 1px solid var(--border);
   background: var(--surface-2);
+}
+
+.tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  flex: 1;
+  padding: 7px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-faint);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+}
+
+.tab:hover {
+  color: var(--text-muted);
+}
+
+.tabActive {
+  color: var(--brand);
+  border-bottom-color: var(--brand);
 }
 
 .list {
@@ -77,6 +103,14 @@
 .itemTitle {
   font-weight: 600;
   font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.itemHeadline {
+  font-size: 10.5px;
+  color: var(--text-faint);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

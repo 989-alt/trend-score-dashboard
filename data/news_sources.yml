@@ -1,0 +1,20 @@
+# RSS 피드 — 국내외 증시·경제. collect_rss_once 가 순회 수집 → news_raw 합류(텔레그램과 동일
+# 클러스터링). 피드별 fail-open(죽은 피드는 조용히 skip). 수집 시 LLM 미사용(₩0).
+# 국내 기사는 KR 종목명, 영문 기사는 US 종목명에 매칭된다(국내 종목 영문 별칭은 미구현).
+feeds:
+  # ── 국내 ───────────────────────────────────────────────────────────
+  - name: "매경 증권"
+    url: "https://www.mk.co.kr/rss/50200011/"
+  - name: "한국경제"
+    url: "https://www.hankyung.com/feed/finance"
+  - name: "연합 경제"
+    url: "https://www.yna.co.kr/rss/economy.xml"
+  - name: "한겨레 경제"
+    url: "https://www.hani.co.kr/rss/economy/"
+  # ── 해외 ───────────────────────────────────────────────────────────
+  - name: "MarketWatch"
+    url: "https://feeds.content.dowjones.io/public/rss/mw_topstories"
+  - name: "CNBC Markets"
+    url: "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=20910258"
+  - name: "Investing.com"
+    url: "https://www.investing.com/rss/news.rss"
