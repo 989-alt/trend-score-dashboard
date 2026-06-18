@@ -36,6 +36,7 @@ def simulate_risk_overlay(
     regime_on: bool = True,
     atr_on: bool = True,
     sizing_on: bool = True,
+    risk_off_dates: set[date] | None = None,
 ) -> OverlayResult:
     """레짐 보류·ATR 손절·사이징 오버레이로 연속 dates 의 NAV 경로를 시뮬한다.
 
@@ -43,6 +44,9 @@ def simulate_risk_overlay(
       regime_on=False → is_risk_off 평가 생략(레짐 현금 미적용; regime_off_dates 빈 채 유지).
       atr_on=False    → 손절 없음(각 픽은 t_next 종가로 청산; intra-period 손절 루프 생략).
       sizing_on=False → 등가중(각 픽 weight=1 → 정규화 수익이 단순 평균).
+    risk_off_dates: 외생 트리거(예: VIX·환율)로 산출한 추가 현금일 집합. 분산일 레짐과
+      **OR 결합**(둘 중 하나라도 off 면 그 구간 현금). 각 T 는 ≤T 외생데이터로 산출돼야
+      룩어헤드 0(호출 측 riskoff.* 가 보장).
     룩어헤드 0(≤T 슬라이스·T 이후 가격만), Decimal 전면.
     """
     nav: list[Decimal] = [Decimal("1")]
@@ -51,12 +55,14 @@ def simulate_risk_overlay(
     cost = cfg.cost_bps / Decimal("10000")
     for i in range(len(dates) - 1):
         t, t_next = dates[i], dates[i + 1]
-        if regime_on and is_risk_off(
+        regime_off_today = regime_on and is_risk_off(
             panel.index_rows_asof(t),
             window=settings.regime_window,
             threshold=settings.regime_threshold,
             drop=settings.regime_drop,
-        ):
+        )
+        injected_off = risk_off_dates is not None and t in risk_off_dates
+        if regime_off_today or injected_off:
             regime_off.append(t)
             period_returns.append(Decimal("0"))
             nav.append(nav[-1])

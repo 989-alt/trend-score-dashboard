@@ -329,6 +329,45 @@ def render_fallback_c_json(
     }
 
 
+def render_news_riskoff_markdown(
+    ablation: dict[str, dict[str, str]], coverage_rows: dict[str, Any]
+) -> str:
+    """뉴스 리스크오프 → 마크다운. 객관 트리거 액션 ablation(위험조정) + 위기 커버리지.
+
+    ablation: config(baseline/+regime/+vix/+fx/조합)별 MDD/Sharpe/Calmar(이미 문자열).
+    coverage_rows: 큐레이션 위기 대비 객관 트리거 catch/miss + 한국 고유(kr) 갭.
+    """
+    lines = [
+        "# 뉴스 리스크오프 리포트 — 객관 트리거 액션(fail-fast) + 위기 커버리지",
+        "",
+        "## 액션 가치 — 리스크오프 ablation (위험조정)",
+        "| config | MDD | Sharpe | Calmar |",
+        "|---|---|---|---|",
+    ]
+    for name, m in ablation.items():
+        lines.append(f"| {name} | {m['mdd']} | {m['sharpe']} | {m['calmar']} |")
+    missed = coverage_rows.get("missed", [])
+    lines += [
+        "",
+        "## 커버리지 — 큐레이션 위기 대비 객관 트리거(VIX∪환율)",
+        f"- 전체: {coverage_rows.get('caught')}/{coverage_rows.get('total')} catch",
+        f"- 한국 고유(kr): {coverage_rows.get('kr_caught')}/{coverage_rows.get('kr_total')} catch",
+        f"- 놓친 위기: {', '.join(missed) if missed else '없음'}",
+        "",
+        "> 판정 게이트(§5): ① 글로벌 트리거가 KR 레짐 대비 MDD 를 *추가로* 유의/명확히 "
+        "줄이고 ② 한국 고유 미스가 크면 → 뉴스 탐지기(b) 구축 정당화. ① 이 아니면 "
+        "파이프라인 미구축(fail-fast).",
+    ]
+    return "\n".join(lines)
+
+
+def render_news_riskoff_json(
+    ablation: dict[str, dict[str, str]], coverage_rows: dict[str, Any]
+) -> dict[str, Any]:
+    """뉴스 리스크오프 → JSON(기계용)."""
+    return {"ablation": ablation, "coverage": coverage_rows}
+
+
 __all__ = [
     "render_fallback_c_json",
     "render_fallback_c_markdown",
@@ -336,6 +375,8 @@ __all__ = [
     "render_horserace_markdown",
     "render_json",
     "render_markdown",
+    "render_news_riskoff_json",
+    "render_news_riskoff_markdown",
     "render_walk_forward_json",
     "render_walk_forward_markdown",
 ]

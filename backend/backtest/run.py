@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from backend import scoring as sc
 from backend.backtest import metrics
@@ -692,6 +692,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="폴백 C 레이어1 ΔMAE ablation + 레이어2 리스크 오버레이 위험조정 평가",
     )
+    p.add_argument(
+        "--news-riskoff",
+        action="store_true",
+        help="뉴스 리스크오프 — 객관 트리거(VIX·환율) 액션 백테스트 + 위기 커버리지(fail-fast)",
+    )
     args = p.parse_args(argv)
 
     start = datetime.strptime(args.start, "%Y-%m-%d").date()
@@ -712,7 +717,7 @@ def main(argv: list[str] | None = None) -> int:
             from backend.backtest.universe import US_UNIVERSE
 
             tickers = list(US_UNIVERSE)
-        elif args.horserace or args.fallback_c:
+        elif args.horserace or args.fallback_c or args.news_riskoff:
             from backend.backtest.universe import build_kr_universe
 
             tickers = build_kr_universe(args.universe_top_n, Path(args.out) / "cache")
@@ -831,6 +836,88 @@ def main(argv: list[str] | None = None) -> int:
         (out_dir / "report_fallback_c.md").write_text(md, encoding="utf-8")
         (out_dir / "report_fallback_c.json").write_text(
             json.dumps(render_fallback_c_json(layer1_rows, layer2), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        print(md)
+        return 0
+    if args.news_riskoff:
+        from dataclasses import replace
+
+        from backend.backtest.metrics import portfolio_metrics
+        from backend.backtest.portfolio import simulate_risk_overlay
+        from backend.backtest.report import (
+            render_news_riskoff_json,
+            render_news_riskoff_markdown,
+        )
+        from backend.backtest.riskoff import (
+            coverage,
+            fx_risk_off_dates,
+            load_crisis_events,
+            load_exog_series,
+            vix_risk_off_dates,
+        )
+        from backend.config import DATA_DIR
+
+        settings = get_settings()
+        wf = WalkForwardConfig(n_folds=args.n_folds, holdout_frac=Decimal(args.holdout_frac))
+        dates = _rebalance_dates(panel, cfg)
+        fold_ranges, holdout = _walk_forward_splits(dates, wf)
+        segments = [test for _tr, test in fold_ranges if len(test) >= 2]
+        if len(holdout) >= 2:
+            segments.append(holdout)
+        all_dates = [t for seg in segments for t in seg]
+        exog_cache = Path(args.out) / "cache" / "exog"
+        vix_off = vix_risk_off_dates(load_exog_series("^VIX", start, end, exog_cache), all_dates)
+        fx_off = fx_risk_off_dates(load_exog_series("KRW=X", start, end, exog_cache), all_dates)
+        combo = vix_off | fx_off
+        # 리스크오프 '액션'만 분리: 손절·사이징 끄고(atr/sizing off) baseline 점수 고정
+        # → config 간 차이는 오직 '현금 vs 투자' 결정뿐.
+        base_cfg = replace(cfg, preset="baseline")
+        configs: dict[str, tuple[bool, set[date] | None]] = {
+            "baseline": (False, None),
+            "+regime": (True, None),
+            "+vix": (False, vix_off),
+            "+fx": (False, fx_off),
+            "+regime+vix+fx": (True, combo),
+        }
+        ablation: dict[str, dict[str, str]] = {}
+        for name, (regime_on, roff) in configs.items():
+            seg_returns: list[Decimal] = []
+            for seg in segments:
+                res = simulate_risk_overlay(
+                    panel,
+                    base_cfg,
+                    settings,
+                    seg,
+                    regime_on=regime_on,
+                    atr_on=False,
+                    sizing_on=False,
+                    risk_off_dates=roff,
+                )
+                seg_returns.extend(res.period_returns)
+            news_nav = [Decimal("1")]
+            for r in seg_returns:
+                news_nav.append(news_nav[-1] * (Decimal("1") + r))
+            m = portfolio_metrics(news_nav, seg_returns, periods_per_year=12)
+            ablation[name] = {
+                "mdd": str(m["mdd"]),
+                "sharpe": str(m["sharpe"]),
+                "calmar": str(m["calmar"]),
+            }
+        cov = coverage(load_crisis_events(DATA_DIR / "crisis_events.yml"), combo, dates)
+        coverage_rows: dict[str, Any] = {
+            "total": cov.total,
+            "caught": cov.caught,
+            "kr_total": cov.kr_total,
+            "kr_caught": cov.kr_caught,
+            "missed": cov.missed,
+        }
+        md = render_news_riskoff_markdown(ablation, coverage_rows)
+        (out_dir / "report_news_riskoff.md").write_text(md, encoding="utf-8")
+        (out_dir / "report_news_riskoff.json").write_text(
+            json.dumps(
+                render_news_riskoff_json(ablation, coverage_rows), ensure_ascii=False, indent=2
+            ),
             encoding="utf-8",
         )
         print(md)
