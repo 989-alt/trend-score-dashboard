@@ -1,11 +1,23 @@
 .rail {
+  position: fixed;
+  top: 96px;
+  right: 100px;
+  width: 280px;
+  max-height: calc(100vh - 120px);
+  display: flex;
+  flex-direction: column;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  overflow: hidden;
-  position: sticky;
-  top: 16px;
-  align-self: start;
+  box-shadow: var(--shadow-md);
+  z-index: 40;
+}
+
+/* 우측 거터를 비우는 넓은 화면(≥1500px)에서만 노출 — 그 이하선 콘텐츠와 겹쳐 숨김. */
+@media (max-width: 1499px) {
+  .rail {
+    display: none;
+  }
 }
 
 .title {
@@ -22,7 +34,8 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 72vh;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
 }
 
