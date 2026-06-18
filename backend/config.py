@@ -82,6 +82,20 @@ class Settings(BaseSettings):
     grade_buy: Decimal = Decimal("60")
     grade_hold: Decimal = Decimal("45")
 
+    # ── 뉴스 수집 (시황 탭) ────────────────────────────────────────────
+    #: my.telegram.org App api_id / api_hash (시크릿 — .env, 커밋 금지).
+    app_api_id: str = ""
+    app_api_hash: str = ""
+    #: Gemini 주간요약(주 1회·읽기전용). 키 없으면 스킵(fail-open).
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
+    #: 뉴스 아카이브 DB(대시보드 DB와 분리). gitignore.
+    news_db_path: Path = DATA_DIR / "news.db"
+    #: Telethon 세션 베이스(.session 자동부착). 시크릿 — gitignore.
+    telethon_session_path: Path = DATA_DIR / "telethon"
+    #: 수집 대상 텔레그램 채널(쉼표구분, @ 없이 username).
+    news_channels: str = "FastStockNews,goodnews_honey,getfeed,jusikbiso"
+
     # ── 테마 ───────────────────────────────────────────────────────────
     top_n_per_theme: int = Field(default=8, ge=1)
     themes_path: Path = DATA_DIR / "themes.yml"
@@ -95,6 +109,11 @@ class Settings(BaseSettings):
     def cors_origin_list(self) -> list[str]:
         """CORS 오리진 문자열 → 리스트."""
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def news_channel_list(self) -> list[str]:
+        """뉴스 채널 문자열 → 공백·빈값 제거 리스트."""
+        return [c.strip() for c in self.news_channels.split(",") if c.strip()]
 
 
 def get_settings() -> Settings:

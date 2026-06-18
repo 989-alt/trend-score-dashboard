@@ -16,6 +16,7 @@ dependencies = [
     "tenacity>=9.0",
     "python-dateutil>=2.9",
     "telethon>=1.44.0",
+    "google-genai>=2.8.0",
 ]
 
 [dependency-groups]
@@ -52,7 +53,7 @@ disallow_untyped_defs = true
 files = ["backend"]
 
 [[tool.mypy.overrides]]
-module = ["pykrx.*", "yfinance.*", "apscheduler.*", "pandas.*"]
+module = ["pykrx.*", "yfinance.*", "apscheduler.*", "pandas.*", "telethon.*", "google.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
