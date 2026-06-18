@@ -20,6 +20,7 @@ import { EntryLane } from "./components/EntryLane";
 import { RankingTable } from "./components/RankingTable";
 import { ThemeBoard } from "./components/ThemeBoard";
 import { NewsView } from "./components/NewsView";
+import { IssueRail } from "./components/IssueRail";
 import { DetailDrawer } from "./components/drawer/DetailDrawer";
 import { CountsStrip } from "./components/CountsStrip";
 import { Footer } from "./components/Footer";
@@ -39,6 +40,7 @@ export function App() {
   const t = useT();
   const [tab, setTab] = useState<TabKey>("themes");
   const [selected, setSelected] = useState<ScoreEntry | null>(null);
+  const [newsIssueKey, setNewsIssueKey] = useState<string | null>(null);
 
   const market = tabToMarket(tab);
   const isMarketTab = market !== null;
@@ -66,9 +68,10 @@ export function App() {
 
   // News polls — enabled only on the situation tab. Weekly summary polls slowly.
   const newsFetcher = useCallback((signal: AbortSignal) => fetchNewsIssues(signal), []);
+  // Polled on every tab: the 긴급 이슈 rail appears on themes/kr/us too (not just 시황).
   const news = usePolling(newsFetcher, ["news"], {
     intervalMs: POLL_MS,
-    enabled: isNewsTab,
+    enabled: true,
   });
   const weeklyFetcher = useCallback((signal: AbortSignal) => fetchNewsWeekly(signal), []);
   const weekly = usePolling(weeklyFetcher, ["weekly"], {
@@ -127,11 +130,17 @@ export function App() {
     if (entry) setSelected(entry);
   }, []);
 
+  // 긴급 이슈 레일(다른 탭) 클릭 → 시황 탭으로 점프 + 해당 이슈 선택.
+  const openIssue = useCallback((key: string) => {
+    setNewsIssueKey(key);
+    setTab("news");
+  }, []);
+
   const showInitialLoading = active.loading && !active.data;
   const showError = !!active.error && !active.data;
 
   return (
-    <div className={styles.app}>
+    <div className={isNewsTab ? styles.app : `${styles.app} ${styles.appRailPad}`}>
       <DemoBanner />
       <div className={styles.container}>
         <Header
@@ -175,7 +184,21 @@ export function App() {
           role="tabpanel"
           aria-labelledby={tabId(tab)}
         >
-          {showInitialLoading ? (
+          {isNewsTab ? (
+            showInitialLoading ? (
+              <LoadingView />
+            ) : showError ? (
+              <ErrorView onRetry={active.refresh} />
+            ) : (
+              <NewsView
+                data={news.data}
+                weekly={weekly.data}
+                onSelectTicker={handleSelectTicker}
+                selectedKey={newsIssueKey}
+                onSelectKey={setNewsIssueKey}
+              />
+            )
+          ) : showInitialLoading ? (
             <LoadingView />
           ) : showError ? (
             <ErrorView onRetry={active.refresh} />
@@ -183,12 +206,6 @@ export function App() {
             <RankingTable
               entries={snapshot.data?.entries ?? []}
               onSelect={setSelected}
-            />
-          ) : isNewsTab ? (
-            <NewsView
-              data={news.data}
-              weekly={weekly.data}
-              onSelectTicker={handleSelectTicker}
             />
           ) : (
             <ThemeBoard
@@ -200,6 +217,10 @@ export function App() {
 
         <Footer />
       </div>
+
+      {!isNewsTab && (
+        <IssueRail issues={news.data?.issues ?? []} onOpen={openIssue} />
+      )}
 
       <DetailDrawer entry={selected} onClose={() => setSelected(null)} />
     </div>
