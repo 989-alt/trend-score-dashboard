@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useT } from "../i18n";
 import type { Market, NewsIssuesData, WeeklyData } from "../types";
 import { GradeBadge } from "./badges/GradeBadge";
@@ -8,6 +7,9 @@ interface Props {
   data: NewsIssuesData | null;
   weekly: WeeklyData | null;
   onSelectTicker: (market: Market, code: string) => void;
+  /** 선택된 이슈 key (App 이 소유 — 다른 탭에서 점프 시 주입). */
+  selectedKey: string | null;
+  onSelectKey: (key: string) => void;
 }
 
 /** ts_kst is an ISO string with +09:00 offset — slice for a tz-stable "MM-DD HH:mm". */
@@ -17,10 +19,9 @@ function tsLabel(iso: string): string {
 }
 
 /** Read-only "situation" tab: urgency-ranked issue sidebar + raw detail + weekly macro. */
-export function NewsView({ data, weekly, onSelectTicker }: Props) {
+export function NewsView({ data, weekly, onSelectTicker, selectedKey, onSelectKey }: Props) {
   const t = useT();
   const issues = data?.issues ?? [];
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const selected = issues.find((i) => i.key === selectedKey) ?? issues[0] ?? null;
 
   return (
@@ -46,7 +47,7 @@ export function NewsView({ data, weekly, onSelectTicker }: Props) {
                     <button
                       type="button"
                       className={`${styles.issueBtn} ${active ? styles.active : ""}`}
-                      onClick={() => setSelectedKey(issue.key)}
+                      onClick={() => onSelectKey(issue.key)}
                     >
                       <span className={styles.rank} data-num>
                         {i + 1}
