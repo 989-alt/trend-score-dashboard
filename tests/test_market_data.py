@@ -520,10 +520,11 @@ def test_live_universe_kr_caches(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_live_fetch_universe_kr_by_market_cap(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``_fetch_universe_kr``: 네이버 시총순위(KOSPI:KOSDAQ≈2:1) → 6자리 코드 + 일1회 디스크 캐시.
+    """``_fetch_universe_kr``: 네이버 시총순위(KOSPI:KOSDAQ≈2:1) → 6자리 코드 + **종목명 확보**.
 
-    네이버 페이지 fetch(``_naver_fetch``)를 mock — KOSPI 우선 합집합, 중복 제거, 그리고
-    2번째 호출이 네이버 재요청 없이 디스크 캐시로 처리되는지 함께 검증한다.
+    네이버 페이지 fetch(``_naver_fetch``)를 mock — KOSPI 우선 합집합/중복 제거, ``class="tltle"``
+    앵커에서 종목명을 ``_kr_names`` 에 채우는지, 그리고 2번째 호출이 디스크 캐시(종목명 포함)로
+    네이버 재요청 없이 처리되는지 검증한다.
     """
     lp = _live()
     settings = lp._settings.model_copy(update={"live_universe_top_n": 6})  # KOSPI 4, KOSDAQ 2
@@ -533,16 +534,16 @@ def test_live_fetch_universe_kr_by_market_cap(monkeypatch: pytest.MonkeyPatch) -
 
     def fake_fetch(url: str) -> str:
         calls["n"] += 1
-        if "sosok=0" in url:  # KOSPI 시총 상위(코드 링크 형태)
+        if "sosok=0" in url:  # KOSPI 시총 상위(class="tltle" 종목명 앵커)
             return (
-                '<a href="/item/main.naver?code=005930">A</a>'
-                '<a href="/item/main.naver?code=000660">B</a>'
-                '<a href="/item/main.naver?code=035420">C</a>'
-                '<a href="/item/main.naver?code=005380">D</a>'
+                '<a href="/item/main.naver?code=005930" class="tltle">삼성전자</a>'
+                '<a href="/item/main.naver?code=000660" class="tltle">SK하이닉스</a>'
+                '<a href="/item/main.naver?code=035420" class="tltle">NAVER</a>'
+                '<a href="/item/main.naver?code=005380" class="tltle">현대차</a>'
             )
         return (
-            '<a href="/item/main.naver?code=247540">E</a>'
-            '<a href="/item/main.naver?code=196170">F</a>'
+            '<a href="/item/main.naver?code=247540" class="tltle">에코프로비엠</a>'
+            '<a href="/item/main.naver?code=196170" class="tltle">알테오젠</a>'
         )
 
     monkeypatch.setattr(lp, "_naver_fetch", fake_fetch)
@@ -551,9 +552,17 @@ def test_live_fetch_universe_kr_by_market_cap(monkeypatch: pytest.MonkeyPatch) -
     # KOSPI quota 4 + KOSDAQ quota 2, KOSPI 먼저(시총 순서 유지).
     assert uni == ["005930", "000660", "035420", "005380", "247540", "196170"]
     assert calls["n"] == 2  # KOSPI 1페이지 + KOSDAQ 1페이지(각 quota ≤ 50)
-    # 일1회 디스크 캐시 — 2번째 호출은 네이버 재요청 없음.
+    # 종목명이 코드가 아니라 기업명으로 확보됐는지.
+    assert lp._kr_names["005930"] == "삼성전자"
+    assert lp._kr_names["247540"] == "에코프로비엠"
+    assert lp.get_name("196170", "KR") == "알테오젠"
+
+    # 디스크 캐시(종목명 포함) — in-memory 캐시를 비워도 네이버 재요청 없이 코드·이름 복원.
+    lp._universe_cache.clear()
+    lp._kr_names.clear()
     assert lp._fetch_universe_kr() == uni
-    assert calls["n"] == 2
+    assert calls["n"] == 2  # 디스크 캐시 → 네이버 미호출
+    assert lp._kr_names["005930"] == "삼성전자"  # 캐시(dict)에서 표시명 복원
 
 
 def test_live_universe_kr_fallback_to_themes(monkeypatch: pytest.MonkeyPatch) -> None:

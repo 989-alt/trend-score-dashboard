@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import html
 import json
 import logging
 import os
@@ -649,6 +650,10 @@ _UNIVERSE_SENTINEL = "_UNIVERSE_"
 _NAVER_MARKET_SUM = "https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}"
 _NAVER_PAGE_SIZE = 50
 _NAVER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+#: 시총순위 행의 종목명 앵커(class="tltle") → (종목코드, 종목명). 종목명을 KRX 비의존으로 확보.
+_NAVER_ROW_RE = re.compile(
+    r'<a href="/item/main\.naver\?code=(\d{6})"[^>]*class="tltle"[^>]*>([^<]+)</a>'
+)
 
 #: RS(지수대비 상대강도) 분모 지수 심볼(yfinance). KR=KOSPI, US=S&P500.
 #: pykrx 지수는 데이터센터 IP 에서 KRX 403 → 양 시장 모두 yfinance 로 일원화.
@@ -1127,48 +1132,69 @@ class LiveProvider:
         """네이버 시총 상위 N 티커 (일1회 디스크 캐시). 실패 시 빈 리스트(→ themes fallback).
 
         pykrx·FDR 의 KRX(``data.krx.co.kr``) 소스가 throttle/차단으로 불안정 → **KRX 비의존**
-        네이버 금융 시가총액 순위로 enumeration. 오늘자 결과는 ``DailyCache`` 에 보관해
-        재시작·다중 호출에도 재요청 없음. 실패는 빈 리스트로 흡수 → themes.yml graceful degrade.
+        네이버 금융 시가총액 순위로 enumeration. **종목명도 같은 페이지에서 얻어** ``_kr_names``
+        에 채운다(KRX/pykrx 비의존 표시명). 캐시는 ``{코드: 종목명}`` 매핑으로 저장해 캐시 적중
+        (재시작 등)에도 표시명을 복원한다. 실패는 빈 리스트로 흡수 → themes.yml graceful degrade.
         """
         today = _market_today("KR")
         cached = self._daily.get("KR", _UNIVERSE_SENTINEL, today, _CACHE_UNIVERSE)
         if cached:
             loaded = json.loads(cached)
-            if isinstance(loaded, list) and loaded:
+            if isinstance(loaded, dict) and loaded:  # {코드: 종목명}
+                self._absorb_names(loaded.items())
+                return [str(code) for code in loaded]
+            if isinstance(loaded, list) and loaded:  # 구형식(코드만) 하위호환
                 return [str(t) for t in loaded]
-        tickers = self._naver_universe_kr()
-        if tickers:
-            self._daily.put("KR", _UNIVERSE_SENTINEL, today, _CACHE_UNIVERSE, json.dumps(tickers))
-        return tickers
+        pairs = self._naver_universe_kr()
+        if pairs:
+            self._absorb_names(pairs)
+            self._daily.put(
+                "KR",
+                _UNIVERSE_SENTINEL,
+                today,
+                _CACHE_UNIVERSE,
+                json.dumps(dict(pairs), ensure_ascii=False),
+            )
+            return [code for code, _ in pairs]
+        return []
 
-    def _naver_universe_kr(self) -> list[str]:
-        """네이버 금융 시가총액 순위 → KOSPI∪KOSDAQ 상위 티커. 실패는 빈 리스트.
+    def _absorb_names(self, pairs: Iterable[tuple[str, str]]) -> None:
+        """(코드, 종목명) 쌍을 ``_kr_names`` 에 채운다(빈 이름은 건너뜀, 기존값 보존)."""
+        for code, name in pairs:
+            if name:
+                self._kr_names.setdefault(str(code), str(name))
+
+    def _naver_universe_kr(self) -> list[tuple[str, str]]:
+        """네이버 금융 시가총액 순위 → KOSPI∪KOSDAQ (종목코드, 종목명) 쌍. 실패는 빈 리스트.
 
         ``live_universe_top_n`` 을 KOSPI:KOSDAQ ≈ 2:1 로 배분(대형주 KOSPI 편중). 각 시장
-        시총 내림차순 페이지(50종목)에서 6자리 코드를 추출·중복 제거한다. 종목명은
-        pykrx(``_kr_name``)가 해석한다. 유동성은 점수 단계의 거래대금 하드필터가 거른다.
+        시총 내림차순 페이지(50종목)에서 코드+종목명을 추출·중복 제거(코드 기준)한다.
+        유동성은 점수 단계의 거래대금 하드필터가 거른다.
         """
         top_n = self._settings.live_universe_top_n
         kospi_quota = top_n * 2 // 3
         try:
-            kospi = self._naver_market_codes(0, kospi_quota)
-            kosdaq = self._naver_market_codes(1, top_n - kospi_quota)
+            rows = self._naver_market_rows(0, kospi_quota)
+            rows += self._naver_market_rows(1, top_n - kospi_quota)
         except (httpx.HTTPError, OSError):
             logger.warning("네이버 유니버스 조회 실패 — themes.yml fallback", exc_info=True)
             return []
-        return _dedup((*kospi, *kosdaq))
-
-    def _naver_market_codes(self, sosok: int, quota: int) -> list[str]:
-        """네이버 시총순위(``sosok``: KOSPI=0/KOSDAQ=1) 상위 ``quota`` 종목코드(6자리)."""
-        pages = -(-quota // _NAVER_PAGE_SIZE)  # ceil
         seen: set[str] = set()
-        out: list[str] = []
+        out: list[tuple[str, str]] = []
+        for code, name in rows:
+            if code not in seen:
+                seen.add(code)
+                out.append((code, name))
+        return out
+
+    def _naver_market_rows(self, sosok: int, quota: int) -> list[tuple[str, str]]:
+        """네이버 시총순위(``sosok``: KOSPI=0/KOSDAQ=1) 상위 ``quota`` (종목코드, 종목명)."""
+        pages = -(-quota // _NAVER_PAGE_SIZE)  # ceil
+        out: list[tuple[str, str]] = []
         for page in range(1, pages + 1):
             text = self._naver_fetch(_NAVER_MARKET_SUM.format(sosok=sosok, page=page))
-            for code in re.findall(r"code=(\d{6})", text):
-                if code not in seen:
-                    seen.add(code)
-                    out.append(code)
+            for code, name in _NAVER_ROW_RE.findall(text):
+                out.append((code, html.unescape(name).strip()))
         return out[:quota]
 
     def _naver_fetch(self, url: str) -> str:
