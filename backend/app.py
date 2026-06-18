@@ -29,6 +29,7 @@ from backend import market_hours
 from backend import scheduler as sched
 from backend.config import ROOT_DIR, Settings, get_settings
 from backend.engine import build_themes_response, ticker_detail
+from backend.news.store import NewsStore
 from backend.schemas import (
     DISCLAIMER,
     HealthResponse,
@@ -97,8 +98,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         서버가 그동안 안 뜬다 → daemon 스레드로 던지고 즉시 서빙을 시작한다.
         """
         store = Store(cfg.db_path)
+        news_store = NewsStore(cfg.news_db_path)
         themes: list[ThemeDef] = load_themes(cfg.themes_path)
-        scheduler: AsyncIOScheduler = sched.build_scheduler(store, cfg)
+        scheduler: AsyncIOScheduler = sched.build_scheduler(store, cfg, news_store)
         scheduler.start()
 
         def _initial_scan() -> None:
@@ -112,6 +114,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         application.state.settings = cfg
         application.state.store = store
+        application.state.news_store = news_store
         application.state.themes = themes
         application.state.scheduler = scheduler
         application.state.initial_thread = initial_thread

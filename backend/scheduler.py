@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -20,6 +21,10 @@ from backend import market_hours
 from backend.config import Settings
 from backend.engine import score_market
 from backend.market_data import get_provider
+from backend.news.collector import collect_once
+from backend.news.factset import collect_factset
+from backend.news.store import NewsStore
+from backend.news.summary import summarize_week
 from backend.schemas import Market, Snapshot
 from backend.store import Store
 from backend.themes import load_themes
@@ -75,7 +80,20 @@ def _run_prep(market: Market, store: Store, settings: Settings) -> None:
     prep_now(market, store, settings)
 
 
-def build_scheduler(store: Store, settings: Settings) -> AsyncIOScheduler:
+async def _run_news_poll(news_store: NewsStore, settings: Settings) -> None:
+    """5분 폴링 — 텔레그램 채널 catch-up(fail-open 은 collect_once 내부)."""
+    await collect_once(news_store, settings)
+
+
+async def _run_news_weekly(news_store: NewsStore, settings: Settings) -> None:
+    """토요일 — FactSet RSS 수집 후 Gemini 주간요약(둘 다 동기→to_thread)."""
+    await asyncio.to_thread(collect_factset, news_store, settings)
+    await asyncio.to_thread(summarize_week, news_store, settings)
+
+
+def build_scheduler(
+    store: Store, settings: Settings, news_store: NewsStore | None = None
+) -> AsyncIOScheduler:
     """``AsyncIOScheduler`` 를 만들어 잡을 등록한 뒤 반환(미시작 상태).
 
     등록 잡(시장별):
@@ -104,6 +122,21 @@ def build_scheduler(store: Store, settings: Settings) -> AsyncIOScheduler:
             IntervalTrigger(minutes=settings.refresh_interval_min, timezone=_SEOUL),
             args=(market, store, settings),
             id=f"intraday-{market}",
+        )
+
+    # ── 뉴스 잡 (news_store 주입 + 키 있을 때만) ───────────────────────
+    if news_store is not None and settings.app_api_id and settings.app_api_hash:
+        scheduler.add_job(
+            _run_news_poll,
+            IntervalTrigger(minutes=5, timezone=_SEOUL),
+            args=(news_store, settings),
+            id="news-poll",
+        )
+        scheduler.add_job(
+            _run_news_weekly,
+            CronTrigger(day_of_week="sat", hour=8, minute=0, timezone=_SEOUL),
+            args=(news_store, settings),
+            id="news-weekly",
         )
 
     return scheduler

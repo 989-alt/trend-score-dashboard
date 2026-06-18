@@ -62,8 +62,10 @@ def main() -> int:
 
     with TelegramClient(str(SESSION_PATH), api_id_int, api_hash) as client:
         me = client.get_me()
-        print(f"\n[OK] 로그인 성공: {getattr(me, 'first_name', '')} "
-              f"(@{getattr(me, 'username', '')})\n")
+        print(
+            f"\n[OK] 로그인 성공: {getattr(me, 'first_name', '')} "
+            f"(@{getattr(me, 'username', '')})\n"
+        )
         print("대상 채널 접근 확인:")
         for ch in CHANNELS:
             try:
@@ -72,7 +74,7 @@ def main() -> int:
                 last = msgs[0].date.isoformat() if msgs else "(메시지 없음)"
                 title = getattr(entity, "title", ch)
                 print(f"  ✅ {ch:16s} | {title} | 최신 {last}")
-            except Exception as exc:  # noqa: BLE001 — 채널별 진단 출력용
+            except Exception as exc:  # 채널별 진단 출력용(fail-open)
                 print(f"  ❌ {ch:16s} | 접근 실패: {exc}")
 
     print("\n완료. data/telethon.session 이 생성되었습니다(커밋 금지).")
