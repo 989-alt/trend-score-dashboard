@@ -19,6 +19,8 @@ from backend.trader.strategy import StrategyEngine
 _NOW = datetime(2026, 6, 22, 1, 0, tzinfo=UTC)
 #: 장 마감 시각 — 같은 영업일 18:05 KST = 09:05 UTC(KR 마감 15:30 이후).
 _CLOSED = datetime(2026, 6, 22, 9, 5, tzinfo=UTC)
+#: 2026-06-22(월) 10:00 EDT = 14:00 UTC — US 정규장(09:30–16:00 ET) 개장 중.
+_NOW_US = datetime(2026, 6, 22, 14, 0, tzinfo=UTC)
 
 
 def _entry(
@@ -70,6 +72,8 @@ class FakeOrderClient:
         self._pending = pending or []
         self._inquire_raises = inquire_raises
         self.calls: list[tuple[str, OrderSide, int]] = []
+        #: 주문별 (price, market) 캡처 — 지정가/시장가 검증용.
+        self.placed: list[dict[str, object]] = []
 
     def get_balance(self) -> Balance:
         return self._balance
@@ -91,6 +95,7 @@ class FakeOrderClient:
         if ticker == self._fail_ticker:
             raise KisOrderError(f"주입 실패: {ticker}")
         self.calls.append((ticker, side, qty))
+        self.placed.append({"ticker": ticker, "side": side, "price": price, "market": market})
         return OrderResult(
             order_no=f"O{len(self.calls)}",
             org_no="6",
@@ -112,6 +117,7 @@ def _loop(
     settings: Settings | None = None,
     pending: list[OrderStatus] | None = None,
     inquire_raises: bool = False,
+    market: Market = "KR",
 ) -> tuple[TraderLoop, FakeOrderClient, TradeStore]:
     settings = settings or Settings(trader_top_n=top_n)
     oc = FakeOrderClient(
@@ -120,7 +126,7 @@ def _loop(
     ts = TradeStore(tmp_path / "trading.db")
     loop = TraderLoop(
         settings,
-        "KR",
+        market,
         order_client=oc,  # type: ignore[arg-type]
         store=FakeStore(snap),  # type: ignore[arg-type]
         trade_store=ts,
@@ -145,6 +151,8 @@ def test_run_once_places_buys_with_sized_qty(tmp_path: Path) -> None:
     # target_value = 20,000,000 * 0.95 / 20 = 950,000.
     # A@10,000 → 95주, B@30,000 → 31주.
     assert oc.calls == [("A", "buy", 95), ("B", "buy", 31)]
+    # KR 은 시장가(market=True, price 미지정) — 미장 지정가와 대비.
+    assert all(p["market"] is True and p["price"] is None for p in oc.placed)
     orders = ts.recent_orders()
     assert len(orders) == 2
     assert {o["ticker"] for o in orders} == {"A", "B"}
@@ -344,3 +352,84 @@ def test_run_once_inquire_error_fails_open(tmp_path: Path) -> None:
     loop.run_once(_NOW)
 
     assert {c[0] for c in oc.calls} == {"A", "B"}
+
+
+# ── 미장 지정가(LIMIT) 처리 (P8) ──────────────────────────────────────────
+
+
+def test_run_once_us_buys_use_limit(tmp_path: Path) -> None:
+    """미장 매수: 스냅샷 가격을 지정가로(market=False), 시장가 아님."""
+    snap = _snap([_entry("AAPL", "90", price="190"), _entry("MSFT", "80", price="400")])
+    balance = Balance(cash=Decimal("20000"), total_eval=Decimal("20000"), positions=[])
+    loop, oc, _ts = _loop(snap=snap, balance=balance, tmp_path=tmp_path, top_n=20, market="US")
+
+    loop.run_once(_NOW_US)
+
+    assert {c[0] for c in oc.calls} == {"AAPL", "MSFT"}
+    placed = {p["ticker"]: p for p in oc.placed}
+    assert placed["AAPL"]["market"] is False and placed["AAPL"]["price"] == Decimal("190")
+    assert placed["MSFT"]["market"] is False and placed["MSFT"]["price"] == Decimal("400")
+
+
+def test_run_once_us_sell_uses_cur_price_limit(tmp_path: Path) -> None:
+    """미장 매도: 보유 현재가(cur_price)를 지정가로(market=False)."""
+    snap = _snap(
+        [
+            _entry("AAPL", "90", price="190"),
+            _entry("TSLA", "85", price="250", sell_alert=True, sell_reason="trailing_stop"),
+        ]
+    )
+    balance = Balance(
+        cash=Decimal("20000"),
+        total_eval=Decimal("20000"),
+        positions=[
+            HoldingPosition(
+                ticker="TSLA", qty=4, avg_price=Decimal("300"), cur_price=Decimal("248.50")
+            )
+        ],
+    )
+    loop, oc, ts = _loop(snap=snap, balance=balance, tmp_path=tmp_path, top_n=20, market="US")
+
+    loop.run_once(_NOW_US)
+
+    # 매도가 먼저, 현재가 248.50 을 지정가로.
+    assert oc.calls[0] == ("TSLA", "sell", 4)
+    sell = next(p for p in oc.placed if p["ticker"] == "TSLA")
+    assert sell["side"] == "sell" and sell["market"] is False
+    assert sell["price"] == Decimal("248.50")
+    assert {o["ticker"]: o["reason"] for o in ts.recent_orders()}["TSLA"] == "청산:트레일링손절"
+
+
+def test_run_once_us_sell_falls_back_to_snapshot_price(tmp_path: Path) -> None:
+    """미장 매도: 보유 현재가 없으면 스냅샷 가격을 지정가로."""
+    snap = _snap([_entry("TSLA", "85", price="250", sell_alert=True, sell_reason="trailing_stop")])
+    balance = Balance(
+        cash=Decimal("20000"),
+        total_eval=Decimal("20000"),
+        # cur_price 미지정(None) → 스냅샷 가격(250) 폴백.
+        positions=[HoldingPosition(ticker="TSLA", qty=4, avg_price=Decimal("300"))],
+    )
+    loop, oc, _ts = _loop(snap=snap, balance=balance, tmp_path=tmp_path, top_n=20, market="US")
+
+    loop.run_once(_NOW_US)
+
+    sell = next(p for p in oc.placed if p["ticker"] == "TSLA")
+    assert sell["market"] is False and sell["price"] == Decimal("250")
+
+
+def test_run_once_us_sell_skipped_without_limit(tmp_path: Path) -> None:
+    """미장 매도: 현재가·스냅샷가 둘 다 없으면(스냅샷 이탈) 지정가 미확보 → 스킵."""
+    # 보유 종목이 스냅샷에 없음 → 청산:스냅샷이탈인데 지정가 출처가 없음.
+    snap = _snap([_entry("AAPL", "90", price="190")])
+    balance = Balance(
+        cash=Decimal("20000"),
+        total_eval=Decimal("20000"),
+        positions=[HoldingPosition(ticker="ZZZZ", qty=4, avg_price=Decimal("300"))],
+    )
+    loop, oc, ts = _loop(snap=snap, balance=balance, tmp_path=tmp_path, top_n=20, market="US")
+
+    loop.run_once(_NOW_US)
+
+    # ZZZZ 매도는 지정가 미확보로 스킵, AAPL 매수만 접수.
+    assert all(c[1] != "sell" for c in oc.calls)
+    assert {o["ticker"] for o in ts.recent_orders()} == {"AAPL"}
