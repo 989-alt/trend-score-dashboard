@@ -65,18 +65,33 @@ class KisToken:
             if disk is not None:
                 self._token, self._token_exp = disk
                 return self._token
-            try:
-                payload = self._request()
-            except httpx.HTTPError as exc:
-                raise KisOrderError("KIS 토큰 발급 실패") from exc
-            token = payload.get("access_token")
-            if not token:
-                raise KisOrderError("KIS 토큰 응답에 access_token 없음")
-            ttl = int(payload.get("expires_in", 86400))
-            self._token = str(token)
-            self._token_exp = now + timedelta(seconds=max(ttl - 60, 60))
-            self._save(self._token, self._token_exp)
-            return self._token
+            return self._issue(now)
+
+    def refresh(self) -> str:
+        """강제 재발급 — 캐시(메모리·디스크) 무시하고 KIS 에서 새 토큰을 받는다.
+
+        서버측 토큰 무효화(EGW00123) 감지 시 호출. 디스크의 stale 토큰도 새 토큰으로 덮어써
+        다음 ``get()`` 및 다른 인스턴스가 유효 토큰을 읽게 한다.
+        """
+        if not (self._appkey and self._appsecret):
+            raise KisOrderError("모의 앱키 미설정 (KIS_APPKEY/KIS_APPSECRET)")
+        with self._lock:
+            return self._issue(datetime.now(tz=UTC))
+
+    def _issue(self, now: datetime) -> str:
+        """KIS 토큰 발급 + 메모리·디스크 저장. **``_lock`` 보유 상태에서만 호출**."""
+        try:
+            payload = self._request()
+        except httpx.HTTPError as exc:
+            raise KisOrderError("KIS 토큰 발급 실패") from exc
+        token = payload.get("access_token")
+        if not token:
+            raise KisOrderError("KIS 토큰 응답에 access_token 없음")
+        ttl = int(payload.get("expires_in", 86400))
+        self._token = str(token)
+        self._token_exp = now + timedelta(seconds=max(ttl - 60, 60))
+        self._save(self._token, self._token_exp)
+        return self._token
 
     @_RETRY
     def _request(self) -> dict[str, Any]:
