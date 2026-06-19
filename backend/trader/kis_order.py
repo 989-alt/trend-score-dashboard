@@ -19,7 +19,7 @@ import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from backend.config import Settings
-from backend.trader.errors import KisOrderError
+from backend.trader.errors import KisOrderError, KisTokenExpiredError
 from backend.trader.kis_auth import KisToken
 from backend.trader.models import (
     Balance,
@@ -122,28 +122,52 @@ class KisOrderClient:
             raise KisOrderError("hashkey 응답 파싱 실패") from exc
 
     @_RETRY
-    def _post(self, path: str, *, tr_id: str, body: dict[str, str]) -> dict[str, Any]:
+    def _post_raw(self, path: str, *, tr_id: str, body: dict[str, str]) -> dict[str, Any]:
         resp = self._client.post(
             path, json=body, headers=self._headers(tr_id, hashkey=self._hashkey(body))
         )
         return self._check(resp, path)
 
     @_RETRY
-    def _get(self, path: str, *, tr_id: str, params: dict[str, str]) -> dict[str, Any]:
+    def _get_raw(self, path: str, *, tr_id: str, params: dict[str, str]) -> dict[str, Any]:
         resp = self._client.get(path, headers=self._headers(tr_id), params=params)
         return self._check(resp, path)
+
+    def _post(self, path: str, *, tr_id: str, body: dict[str, str]) -> dict[str, Any]:
+        """주문 POST. 토큰 만료(EGW00123) 시 1회 재발급 후 재시도(자가치유)."""
+        try:
+            return self._post_raw(path, tr_id=tr_id, body=body)
+        except KisTokenExpiredError:
+            logger.warning("KIS 토큰 만료 감지 — 재발급 후 재시도 (%s)", path)
+            self._token.refresh()
+            return self._post_raw(path, tr_id=tr_id, body=body)
+
+    def _get(self, path: str, *, tr_id: str, params: dict[str, str]) -> dict[str, Any]:
+        """조회 GET. 토큰 만료(EGW00123) 시 1회 재발급 후 재시도(자가치유)."""
+        try:
+            return self._get_raw(path, tr_id=tr_id, params=params)
+        except KisTokenExpiredError:
+            logger.warning("KIS 토큰 만료 감지 — 재발급 후 재시도 (%s)", path)
+            self._token.refresh()
+            return self._get_raw(path, tr_id=tr_id, params=params)
 
     @staticmethod
     def _check(resp: httpx.Response, path: str) -> dict[str, Any]:
         # 비-2xx 는 KIS 에러 본문(msg_cd/msg1 등)을 메시지에 실어 던진다 — 진단에 필수.
         # (raise_for_status 는 본문을 버려 디버깅 불가했음.) 본문은 300자로 자른다.
+        # EGW00123(만료 토큰)은 KisTokenExpired 로 구분 — 호출 측이 재발급+재시도하게.
         if resp.status_code >= 400:
-            raise KisOrderError(f"KIS HTTP {resp.status_code} ({path}): {resp.text[:300]}")
+            body = resp.text[:300]
+            if "EGW00123" in body or "만료된 token" in body:
+                raise KisTokenExpiredError(f"KIS 토큰 만료 (HTTP {resp.status_code}, {path})")
+            raise KisOrderError(f"KIS HTTP {resp.status_code} ({path}): {body}")
         try:
             data: dict[str, Any] = resp.json()
         except ValueError as exc:
             raise KisOrderError(f"KIS 응답 JSON 파싱 실패: {path}") from exc
         if str(data.get("rt_cd", "1")) != "0":
+            if str(data.get("msg_cd", "")) == "EGW00123":
+                raise KisTokenExpiredError(f"KIS 토큰 만료 ({path})")
             raise KisOrderError(f"KIS 오류({data.get('msg_cd')}): {data.get('msg1')}")
         return data
 

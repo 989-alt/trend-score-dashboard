@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 import pytest
 from backend.config import Settings
+from backend.trader.errors import KisTokenExpiredError
 from backend.trader.kis_order import KisOrderClient, KisOrderError
 
 
@@ -191,3 +192,59 @@ def test_http_error_surfaces_body(monkeypatch: pytest.MonkeyPatch) -> None:
         c.get_balance()
     msg = str(ei.value)
     assert "500" in msg and "미지원" in msg
+
+
+def test_check_token_expired_on_http500_egw00123() -> None:
+    """HTTP 500 + EGW00123 본문은 KisTokenExpired(일반 오류 아님)로 구분."""
+    body = '{"rt_cd":"1","msg_cd":"EGW00123","msg1":"기간이 만료된 token 입니다."}'
+    resp = httpx.Response(500, text=body, request=httpx.Request("GET", "http://test"))
+    with pytest.raises(KisTokenExpiredError):
+        KisOrderClient._check(resp, "/x")
+
+
+def test_check_token_expired_on_rt_cd_egw00123() -> None:
+    """HTTP 200 + rt_cd=1 + msg_cd=EGW00123 도 KisTokenExpiredError."""
+    resp = _resp({"rt_cd": "1", "msg_cd": "EGW00123", "msg1": "만료"})
+    with pytest.raises(KisTokenExpiredError):
+        KisOrderClient._check(resp, "/x")
+
+
+def test_token_refresh_forces_reissue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """refresh() 는 메모리 토큰이 유효해도 강제 재발급(서버측 무효화 자가치유)."""
+    c = _client()  # 메모리 토큰 "tok" 1시간 유효
+    calls = {"n": 0}
+
+    def fake_req() -> dict[str, Any]:
+        calls["n"] += 1
+        return {"access_token": f"new{calls['n']}", "expires_in": 3600}
+
+    monkeypatch.setattr(c._token, "_request", fake_req)
+    assert c._token.get() == "tok" and calls["n"] == 0  # 캐시 사용, 발급 안 함
+    assert c._token.refresh() == "new1" and calls["n"] == 1  # 캐시 무시, 강제 발급
+    assert c._token.get() == "new1"  # 이후 새 토큰 캐시
+
+
+def test_get_self_heals_on_token_expired(monkeypatch: pytest.MonkeyPatch) -> None:
+    """조회 중 EGW00123 → 토큰 재발급 후 1회 재시도해 성공."""
+    c = _client()
+    refreshed = {"n": 0}
+
+    def fake_refresh() -> str:
+        refreshed["n"] += 1
+        return "newtok"
+
+    monkeypatch.setattr(c._token, "refresh", fake_refresh)
+    expired = httpx.Response(
+        500, text='{"msg_cd":"EGW00123"}', request=httpx.Request("GET", "http://test")
+    )
+    ok = _resp({"rt_cd": "0", "output1": [], "output2": [{}]})
+    calls = {"n": 0}
+
+    def fake_get(path: str, headers: Any = None, params: Any = None) -> httpx.Response:
+        calls["n"] += 1
+        return expired if calls["n"] == 1 else ok
+
+    monkeypatch.setattr(c._client, "get", fake_get)
+    bal = c.get_balance()
+    assert calls["n"] == 2 and refreshed["n"] == 1  # 만료 → 재발급 → 재시도
+    assert bal.cash == Decimal("0")
