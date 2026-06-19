@@ -198,17 +198,19 @@ class KisOrderClient:
         resp = self._client.post(
             path, json=body, headers=self._headers(tr_id, hashkey=self._hashkey(body))
         )
-        resp.raise_for_status()
         return self._check(resp, path)
 
     @_RETRY
     def _get(self, path: str, *, tr_id: str, params: dict[str, str]) -> dict[str, Any]:
         resp = self._client.get(path, headers=self._headers(tr_id), params=params)
-        resp.raise_for_status()
         return self._check(resp, path)
 
     @staticmethod
     def _check(resp: httpx.Response, path: str) -> dict[str, Any]:
+        # 비-2xx 는 KIS 에러 본문(msg_cd/msg1 등)을 메시지에 실어 던진다 — 진단에 필수.
+        # (raise_for_status 는 본문을 버려 디버깅 불가했음.) 본문은 300자로 자른다.
+        if resp.status_code >= 400:
+            raise KisOrderError(f"KIS HTTP {resp.status_code} ({path}): {resp.text[:300]}")
         try:
             data: dict[str, Any] = resp.json()
         except ValueError as exc:
