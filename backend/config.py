@@ -122,6 +122,10 @@ class Settings(BaseSettings):
     kis_account_prod: str = "01"
     #: 매매봇 토큰 디스크 캐시(모의 도메인 토큰 — 시세 real 토큰과 분리). 시크릿 — gitignore.
     trader_token_path: Path = DATA_DIR / ".trader_token.json"
+    #: 보유 종목 수(점수 상위 N 진입). 목표금액 = 가용평가액 ÷ N.
+    trader_top_n: int = Field(default=20, ge=1)
+    #: 현금버퍼 비율(평가액 중 미투자 여유). 슬리피지·체결지연 흡수.
+    trader_cash_buffer: Decimal = Decimal("0.05")
 
     @property
     def cors_origin_list(self) -> list[str]:
