@@ -126,6 +126,8 @@ class Settings(BaseSettings):
     trader_db_path: Path = DATA_DIR / "trading.db"
     #: 보유 종목 수(점수 상위 N 진입). 목표금액 = 가용평가액 ÷ N.
     trader_top_n: int = Field(default=20, ge=1)
+    #: 매매 루프 주기(초). 1분 기본, 최소 10초(과도한 폴링·중복주문 방지).
+    trader_loop_sec: int = Field(default=60, ge=10)
     #: 현금버퍼 비율(평가액 중 미투자 여유). 슬리피지·체결지연 흡수.
     trader_cash_buffer: Decimal = Decimal("0.05")
     #: 킬스위치 — True 면 신규 매수 중단(매도·손절은 계속 = 리스크 축소).

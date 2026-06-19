@@ -1,0 +1,45 @@
+# ── trend-trader (모의 전진검증 매매봇) systemd 유닛 TEMPLATE ──────────────────
+# 이 파일은 OCI 서버용 템플릿이다. 경로/사용자는 서버에 맞게 조정할 수 있다.
+#   sudo cp deploy/systemd/trend-trader.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now trend-trader.service
+#   journalctl -u trend-trader -f
+# 대시보드(trend-board.service)와 별도 프로세스로, BlockingScheduler 가 1분(기본) 주기로
+# KIS 모의 매매 루프를 돈다. KIS 키·계좌(KIS_ACCOUNT=50190719)는 .env 에서 읽는다.
+
+[Unit]
+Description=trend-trader (모의 전진검증 매매봇)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/trend-score-dashboard
+EnvironmentFile=/home/ubuntu/trend-score-dashboard/.env
+Environment=PYTHONUNBUFFERED=1 PYTHONUTF8=1 TZ=Asia/Seoul
+# trend-board 와 동일하게 .venv 의 python 으로 실행. (uv 가 PATH 에 있으면
+#   ExecStart=/home/ubuntu/.local/bin/uv run python scripts/run_trader.py  로 대체 가능.)
+ExecStart=/home/ubuntu/trend-score-dashboard/.venv/bin/python scripts/run_trader.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/home/ubuntu/trend-score-dashboard/logs/trader.log
+StandardError=append:/home/ubuntu/trend-score-dashboard/logs/trader.log
+
+# 보안 강화 (trend-board.service 와 동일 — swing-bot 교훈 계승).
+NoNewPrivileges=true
+ProtectSystem=strict
+# data(SQLite trading.db·토큰)·logs 만 쓰기 허용. ProtectHome=read-only + ReadWritePaths
+# 조합(tmpfs 는 status 226/NAMESPACE 실패 사례 — read-only 사용).
+ReadWritePaths=/home/ubuntu/trend-score-dashboard/data /home/ubuntu/trend-score-dashboard/logs
+ProtectHome=read-only
+BindReadOnlyPaths=/home/ubuntu/trend-score-dashboard/.env
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
