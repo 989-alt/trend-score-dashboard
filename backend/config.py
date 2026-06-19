@@ -126,6 +126,10 @@ class Settings(BaseSettings):
     trader_top_n: int = Field(default=20, ge=1)
     #: 현금버퍼 비율(평가액 중 미투자 여유). 슬리피지·체결지연 흡수.
     trader_cash_buffer: Decimal = Decimal("0.05")
+    #: 킬스위치 — True 면 신규 매수 중단(매도·손절은 계속 = 리스크 축소).
+    trader_kill_switch: bool = False
+    #: 이 파일이 존재해도 신규 매수 중단(재배포 없이 운영 중단용 — touch/rm 로 토글).
+    trader_halt_file: Path = DATA_DIR / ".trader_halt"
 
     @property
     def cors_origin_list(self) -> list[str]:

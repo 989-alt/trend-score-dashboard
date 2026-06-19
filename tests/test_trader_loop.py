@@ -10,12 +10,15 @@ from backend.config import Settings
 from backend.schemas import Grade, Market, ScoreEntry, SellReason, Snapshot
 from backend.trader.kis_order import KisOrderError
 from backend.trader.loop import TraderLoop
-from backend.trader.models import Balance, HoldingPosition, OrderResult, OrderSide
+from backend.trader.models import Balance, HoldingPosition, OrderResult, OrderSide, OrderStatus
 from backend.trader.positions import PositionManager
 from backend.trader.store import TradeStore
 from backend.trader.strategy import StrategyEngine
 
-_NOW = datetime(2026, 6, 22, 9, 5, tzinfo=UTC)
+#: 2026-06-22(월) 10:00 KST = 01:00 UTC — KR 정규장 개장 중(주문 가드 통과용).
+_NOW = datetime(2026, 6, 22, 1, 0, tzinfo=UTC)
+#: 장 마감 시각 — 같은 영업일 18:05 KST = 09:05 UTC(KR 마감 15:30 이후).
+_CLOSED = datetime(2026, 6, 22, 9, 5, tzinfo=UTC)
 
 
 def _entry(
@@ -54,13 +57,27 @@ class FakeStore:
 class FakeOrderClient:
     """KisOrderClient 대역 — 잔고 고정, 주문은 기록(특정 종목은 에러 주입)."""
 
-    def __init__(self, balance: Balance, *, fail_ticker: str | None = None) -> None:
+    def __init__(
+        self,
+        balance: Balance,
+        *,
+        fail_ticker: str | None = None,
+        pending: list[OrderStatus] | None = None,
+        inquire_raises: bool = False,
+    ) -> None:
         self._balance = balance
         self._fail_ticker = fail_ticker
+        self._pending = pending or []
+        self._inquire_raises = inquire_raises
         self.calls: list[tuple[str, OrderSide, int]] = []
 
     def get_balance(self) -> Balance:
         return self._balance
+
+    def inquire_orders(self, query_date: str) -> list[OrderStatus]:
+        if self._inquire_raises:
+            raise KisOrderError(f"주입 실패: 조회 {query_date}")
+        return self._pending
 
     def place_order(
         self,
@@ -92,9 +109,14 @@ def _loop(
     tmp_path: Path,
     top_n: int = 20,
     fail_ticker: str | None = None,
+    settings: Settings | None = None,
+    pending: list[OrderStatus] | None = None,
+    inquire_raises: bool = False,
 ) -> tuple[TraderLoop, FakeOrderClient, TradeStore]:
-    settings = Settings(trader_top_n=top_n)
-    oc = FakeOrderClient(balance, fail_ticker=fail_ticker)
+    settings = settings or Settings(trader_top_n=top_n)
+    oc = FakeOrderClient(
+        balance, fail_ticker=fail_ticker, pending=pending, inquire_raises=inquire_raises
+    )
     ts = TradeStore(tmp_path / "trading.db")
     loop = TraderLoop(
         settings,
@@ -225,3 +247,100 @@ def test_run_once_skips_nonpositive_price(tmp_path: Path) -> None:
     loop.run_once(_NOW)
 
     assert {c[0] for c in oc.calls} == {"B"}
+
+
+# ── 리스크 가드 (P4) ──────────────────────────────────────────────────────
+
+
+def _pending(ticker: str, *, side: OrderSide = "buy", order_qty: int = 10) -> OrderStatus:
+    """미체결(주문>체결) 주문 1건."""
+    return OrderStatus(
+        order_no="P1", ticker=ticker, side=side, order_qty=order_qty, filled_qty=0, status="접수"
+    )
+
+
+def test_run_once_market_closed_records_nav_no_orders(tmp_path: Path) -> None:
+    """장 마감: 주문은 전부 스킵하되 NAV 스냅샷은 기록(연속성 유지)."""
+    snap = _snap(
+        [_entry("A", "90"), _entry("H", "85", sell_alert=True, sell_reason="trailing_stop")]
+    )
+    balance = Balance(
+        cash=Decimal("20000000"),
+        total_eval=Decimal("20000000"),
+        positions=[HoldingPosition(ticker="H", qty=7, avg_price=Decimal("10000"))],
+    )
+    loop, oc, ts = _loop(snap=snap, balance=balance, tmp_path=tmp_path, top_n=20)
+
+    loop.run_once(_CLOSED)
+
+    assert oc.calls == []
+    assert ts.recent_orders() == []
+    nav = ts.nav_series()
+    assert len(nav) == 1
+    assert nav[0]["total_eval"] == Decimal("20000000")
+
+
+def test_run_once_kill_switch_skips_buys_keeps_sells(tmp_path: Path) -> None:
+    """킬스위치 ON: 신규 매수는 스킵, 매도(손절)는 계속 접수."""
+    snap = _snap(
+        [_entry("A", "90"), _entry("H", "85", sell_alert=True, sell_reason="trailing_stop")]
+    )
+    balance = Balance(
+        cash=Decimal("20000000"),
+        total_eval=Decimal("20000000"),
+        positions=[HoldingPosition(ticker="H", qty=7, avg_price=Decimal("10000"))],
+    )
+    settings = Settings(trader_top_n=20, trader_kill_switch=True)
+    loop, oc, ts = _loop(snap=snap, balance=balance, tmp_path=tmp_path, settings=settings)
+
+    loop.run_once(_NOW)
+
+    assert oc.calls == [("H", "sell", 7)]
+    assert {o["ticker"] for o in ts.recent_orders()} == {"H"}
+
+
+def test_run_once_halt_file_skips_buys(tmp_path: Path) -> None:
+    """halt 파일 존재: 신규 매수 스킵(매도는 계속)."""
+    halt = tmp_path / ".trader_halt"
+    halt.write_text("stop", encoding="utf-8")
+    snap = _snap(
+        [_entry("A", "90"), _entry("H", "85", sell_alert=True, sell_reason="trailing_stop")]
+    )
+    balance = Balance(
+        cash=Decimal("20000000"),
+        total_eval=Decimal("20000000"),
+        positions=[HoldingPosition(ticker="H", qty=7, avg_price=Decimal("10000"))],
+    )
+    settings = Settings(trader_top_n=20, trader_halt_file=halt)
+    loop, oc, _ts = _loop(snap=snap, balance=balance, tmp_path=tmp_path, settings=settings)
+
+    loop.run_once(_NOW)
+
+    assert oc.calls == [("H", "sell", 7)]
+
+
+def test_run_once_skips_pending_ticker(tmp_path: Path) -> None:
+    """당일 미체결 종목은 재주문 스킵(다른 종목은 정상 접수)."""
+    snap = _snap([_entry("A", "90"), _entry("B", "80")])
+    balance = Balance(cash=Decimal("20000000"), total_eval=Decimal("20000000"), positions=[])
+    loop, oc, ts = _loop(
+        snap=snap, balance=balance, tmp_path=tmp_path, top_n=20, pending=[_pending("A")]
+    )
+
+    loop.run_once(_NOW)
+
+    assert {c[0] for c in oc.calls} == {"B"}
+    assert {o["ticker"] for o in ts.recent_orders()} == {"B"}
+
+
+def test_run_once_inquire_error_fails_open(tmp_path: Path) -> None:
+    """당일 주문 조회 실패 → fail-open(멱등 가드 우회, 주문은 계속)."""
+    snap = _snap([_entry("A", "90"), _entry("B", "80")])
+    balance = Balance(cash=Decimal("20000000"), total_eval=Decimal("20000000"), positions=[])
+    loop, oc, _ts = _loop(
+        snap=snap, balance=balance, tmp_path=tmp_path, top_n=20, inquire_raises=True
+    )
+
+    loop.run_once(_NOW)
+
+    assert {c[0] for c in oc.calls} == {"A", "B"}
