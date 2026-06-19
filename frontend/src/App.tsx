@@ -5,6 +5,10 @@ import {
   fetchSnapshot,
   fetchThemes,
   fetchTicker,
+  fetchTradingHistory,
+  fetchTradingNav,
+  fetchTradingPositions,
+  fetchTradingStatus,
 } from "./api";
 import type { Market, ScoreEntry } from "./types";
 import { usePolling } from "./hooks/usePolling";
@@ -20,6 +24,7 @@ import { EntryLane } from "./components/EntryLane";
 import { RankingTable } from "./components/RankingTable";
 import { ThemeBoard } from "./components/ThemeBoard";
 import { NewsView } from "./components/NewsView";
+import { TradingView } from "./components/TradingView";
 import { IssueRail } from "./components/IssueRail";
 import { DetailDrawer } from "./components/drawer/DetailDrawer";
 import { CountsStrip } from "./components/CountsStrip";
@@ -45,6 +50,7 @@ export function App() {
   const market = tabToMarket(tab);
   const isMarketTab = market !== null;
   const isNewsTab = tab === "news";
+  const isTradingTab = tab === "trading";
 
   // Snapshot poll — enabled only on KR/US tabs, keyed by market.
   const snapshotFetcher = useCallback(
@@ -79,7 +85,47 @@ export function App() {
     enabled: isNewsTab,
   });
 
-  const active = isMarketTab ? snapshot : isNewsTab ? news : themes;
+  // Trading polls — enabled only on the 매매 현황 tab.
+  const tradingStatusFetcher = useCallback(
+    (signal: AbortSignal) => fetchTradingStatus(signal),
+    [],
+  );
+  const tradingStatus = usePolling(tradingStatusFetcher, ["trading-status"], {
+    intervalMs: POLL_MS,
+    enabled: isTradingTab,
+  });
+  const tradingPositionsFetcher = useCallback(
+    (signal: AbortSignal) => fetchTradingPositions(signal),
+    [],
+  );
+  const tradingPositions = usePolling(tradingPositionsFetcher, ["trading-positions"], {
+    intervalMs: POLL_MS,
+    enabled: isTradingTab,
+  });
+  const tradingHistoryFetcher = useCallback(
+    (signal: AbortSignal) => fetchTradingHistory(50, signal),
+    [],
+  );
+  const tradingHistory = usePolling(tradingHistoryFetcher, ["trading-history"], {
+    intervalMs: POLL_MS,
+    enabled: isTradingTab,
+  });
+  const tradingNavFetcher = useCallback(
+    (signal: AbortSignal) => fetchTradingNav(2000, signal),
+    [],
+  );
+  const tradingNav = usePolling(tradingNavFetcher, ["trading-nav"], {
+    intervalMs: POLL_MS,
+    enabled: isTradingTab,
+  });
+
+  const active = isMarketTab
+    ? snapshot
+    : isNewsTab
+      ? news
+      : isTradingTab
+        ? tradingStatus
+        : themes;
 
   // Header indicators derived from whichever resource is active.
   const marketOpen: boolean | null = useMemo(() => {
@@ -153,7 +199,7 @@ export function App() {
 
         <MarketTabs active={tab} onChange={setTab} />
 
-        {!isNewsTab && (
+        {!isNewsTab && !isTradingTab && (
           <>
             <EntryLane
               variant="buy"
@@ -198,6 +244,19 @@ export function App() {
                 onSelectKey={setNewsIssueKey}
               />
             )
+          ) : isTradingTab ? (
+            showInitialLoading ? (
+              <LoadingView />
+            ) : showError ? (
+              <ErrorView onRetry={active.refresh} />
+            ) : (
+              <TradingView
+                status={tradingStatus.data}
+                positions={tradingPositions.data?.positions ?? []}
+                orders={tradingHistory.data?.orders ?? []}
+                nav={tradingNav.data?.nav ?? []}
+              />
+            )
           ) : showInitialLoading ? (
             <LoadingView />
           ) : showError ? (
@@ -218,7 +277,7 @@ export function App() {
         <Footer />
       </div>
 
-      {!isNewsTab && (
+      {!isNewsTab && !isTradingTab && (
         <IssueRail data={news.data} onOpen={openIssue} />
       )}
 
