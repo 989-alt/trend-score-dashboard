@@ -116,7 +116,10 @@ class Settings(BaseSettings):
     kis_token_path: Path = DATA_DIR / ".kis_token.json"
 
     # ── 모의 매매봇 (trend-trader, 전진검증) ──────────────────────────────
-    #: KIS 앱 키는 1개로 실전·모의 도메인 공용 → 주문도 ``kis_app_key``/``kis_app_secret`` 재사용.
+    #: 모의투자 전용 앱키(KIS_APPKEY/KIS_APPSECRET — 언더스코어 없음, swing-bot 과 동일). 시세용
+    #: kis_app_key(실전)와 별개: KIS는 실전·모의 앱키를 따로 발급(실전키로 모의 주문 시 EGW02007).
+    kis_appkey: str = ""
+    kis_appsecret: str = ""
     #: 모의계좌번호(KIS_ACCOUNT) — 예 "50190719". 상품코드는 kis_account_prod(기본 01).
     kis_account: str = ""
     kis_account_prod: str = "01"

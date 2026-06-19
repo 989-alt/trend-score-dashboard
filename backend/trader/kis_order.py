@@ -98,8 +98,8 @@ class KisOrderClient:
         now = datetime.now(tz=UTC)
         if self._token and self._token_exp and now < self._token_exp:
             return self._token
-        if not (self._s.kis_app_key and self._s.kis_app_secret):
-            raise KisOrderError("KIS 키 미설정 (KIS_APP_KEY/KIS_APP_SECRET)")
+        if not (self._s.kis_appkey and self._s.kis_appsecret):
+            raise KisOrderError("모의 앱키 미설정 (KIS_APPKEY/KIS_APPSECRET)")
         with self._lock:
             now = datetime.now(tz=UTC)
             if self._token and self._token_exp and now < self._token_exp:
@@ -127,8 +127,8 @@ class KisOrderClient:
             "/oauth2/tokenP",
             json={
                 "grant_type": "client_credentials",
-                "appkey": self._s.kis_app_key,
-                "appsecret": self._s.kis_app_secret,
+                "appkey": self._s.kis_appkey,
+                "appsecret": self._s.kis_appsecret,
             },
         )
         resp.raise_for_status()
@@ -166,8 +166,8 @@ class KisOrderClient:
     def _headers(self, tr_id: str, *, hashkey: str | None = None) -> dict[str, str]:
         h = {
             "authorization": f"Bearer {self._ensure_token()}",
-            "appkey": self._s.kis_app_key,
-            "appsecret": self._s.kis_app_secret,
+            "appkey": self._s.kis_appkey,
+            "appsecret": self._s.kis_appsecret,
             "tr_id": tr_id,
             "custtype": "P",
         }
@@ -182,8 +182,8 @@ class KisOrderClient:
             "/uapi/hashkey",
             json=body,
             headers={
-                "appkey": self._s.kis_app_key,
-                "appsecret": self._s.kis_app_secret,
+                "appkey": self._s.kis_appkey,
+                "appsecret": self._s.kis_appsecret,
                 "content-type": "application/json; charset=utf-8",
             },
         )

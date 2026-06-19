@@ -20,8 +20,8 @@ from backend.trader.kis_order import KisOrderClient, KisOrderError
 def _client(*, with_token: bool = True) -> KisOrderClient:
     tmp = Path(tempfile.mkdtemp(prefix="tsd-trader-"))
     settings = Settings(
-        kis_app_key="k",
-        kis_app_secret="s",
+        kis_appkey="k",
+        kis_appsecret="s",
         kis_account="50190719",
         kis_account_prod="01",
         trader_token_path=tmp / ".tok.json",
@@ -54,7 +54,7 @@ def test_token_issue_and_cache(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_token_missing_keys_raises() -> None:
     """키 미설정이면 KisOrderError."""
-    c = KisOrderClient(Settings(kis_app_key="", kis_app_secret=""))
+    c = KisOrderClient(Settings(kis_appkey="", kis_appsecret=""))
     with pytest.raises(KisOrderError):
         c._ensure_token()
 
