@@ -17,12 +17,18 @@ from decimal import Decimal
 
 from backend.config import Settings
 from backend.market_hours import is_market_open
-from backend.schemas import Market
+from backend.schemas import Market, ScoreEntry
 from backend.store import Store
-from backend.trader.kis_order import KisOrderClient, KisOrderError
+from backend.trader.errors import KisOrderError
+from backend.trader.kis_order import KisOrderClient
+from backend.trader.kis_overseas import KisOverseasOrderClient
+from backend.trader.models import OrderResult
 from backend.trader.positions import PositionManager
 from backend.trader.store import TradeStore
 from backend.trader.strategy import StrategyEngine
+
+#: 주문 클라이언트 — 국내(시장가) 또는 해외(지정가). 둘 다 동일 메서드 시그니처.
+OrderClient = KisOrderClient | KisOverseasOrderClient
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +43,7 @@ class TraderLoop:
         settings: Settings,
         market: Market,
         *,
-        order_client: KisOrderClient,
+        order_client: OrderClient,
         store: Store,
         trade_store: TradeStore,
         engine: StrategyEngine,
@@ -91,6 +97,7 @@ class TraderLoop:
         decisions = self._engine.decide(snap.entries, self._pm, top_n=self._s.trader_top_n)
         pending = self._pending_tickers(now)
         halted = self._buys_halted()
+        by_ticker = {e.ticker: e for e in snap.entries}
 
         # 매도 먼저 — 현금 확보. (당일 미체결 종목은 재주문 스킵.)
         for ticker, reason in decisions.sells:
@@ -100,18 +107,14 @@ class TraderLoop:
             if ticker in pending:
                 logger.info("미체결 잔존 — 매도 재주문 스킵 (ticker=%s)", ticker)
                 continue
-            try:
-                order = self._oc.place_order(ticker, "sell", qty, market=True)
-            except KisOrderError:
-                logger.warning("매도 주문 실패 — 스킵 (ticker=%s)", ticker, exc_info=True)
-                continue
-            self._ts.record_order(order, reason=reason)
+            order = self._place_sell(ticker, qty, by_ticker.get(ticker))
+            if order is not None:
+                self._ts.record_order(order, reason=reason)
 
         # 매수 — 종목당 목표금액(가용평가액 ÷ top_n). 킬스위치/미체결 시 스킵.
         if halted:
             logger.warning("킬스위치 — 신규 매수 중단 (market=%s)", self._market)
         else:
-            by_ticker = {e.ticker: e for e in snap.entries}
             target_value = (self._pm.total_eval * (_ONE - self._s.trader_cash_buffer)) / Decimal(
                 self._s.trader_top_n
             )
@@ -125,14 +128,48 @@ class TraderLoop:
                 qty = PositionManager.target_qty(target_value, entry.price)
                 if qty <= 0:
                     continue
-                try:
-                    order = self._oc.place_order(ticker, "buy", qty, market=True)
-                except KisOrderError:
-                    logger.warning("매수 주문 실패 — 스킵 (ticker=%s)", ticker, exc_info=True)
-                    continue
-                self._ts.record_order(order, reason="진입:점수상위")
+                order = self._place_buy(ticker, qty, entry.price)
+                if order is not None:
+                    self._ts.record_order(order, reason="진입:점수상위")
 
         _record_nav()
+
+    def _is_us(self) -> bool:
+        """미장 여부 — 미장은 지정가(LIMIT) 전용(시장가 없음), 국장은 시장가."""
+        return self._market == "US"
+
+    def _place_buy(self, ticker: str, qty: int, snap_price: Decimal) -> OrderResult | None:
+        """매수 접수. 미장=스냅샷가 지정가, 국장=시장가. 실패 시 스킵(None 반환)."""
+        try:
+            if self._is_us():
+                return self._oc.place_order(ticker, "buy", qty, price=snap_price, market=False)
+            return self._oc.place_order(ticker, "buy", qty, market=True)
+        except KisOrderError:
+            logger.warning("매수 주문 실패 — 스킵 (ticker=%s)", ticker, exc_info=True)
+            return None
+
+    def _place_sell(self, ticker: str, qty: int, entry: ScoreEntry | None) -> OrderResult | None:
+        """매도 접수. 국장=시장가. 미장=현재가(없으면 스냅샷가) 지정가, 둘 다 없으면 스킵."""
+        try:
+            if not self._is_us():
+                return self._oc.place_order(ticker, "sell", qty, market=True)
+            limit = self._sell_limit(ticker, entry)
+            if limit is None:
+                logger.warning("미장 매도 지정가 미확보 — 스킵 (ticker=%s)", ticker)
+                return None
+            return self._oc.place_order(ticker, "sell", qty, price=limit, market=False)
+        except KisOrderError:
+            logger.warning("매도 주문 실패 — 스킵 (ticker=%s)", ticker, exc_info=True)
+            return None
+
+    def _sell_limit(self, ticker: str, entry: ScoreEntry | None) -> Decimal | None:
+        """미장 매도 지정가 — 보유 현재가 우선, 없으면 스냅샷 가격. 둘 다 없으면 None."""
+        pos = self._pm.position(ticker)
+        if pos is not None and pos.cur_price is not None and pos.cur_price > 0:
+            return pos.cur_price
+        if entry is not None and entry.price > 0:
+            return entry.price
+        return None
 
 
 __all__ = ["TraderLoop"]

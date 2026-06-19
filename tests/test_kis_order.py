@@ -28,8 +28,9 @@ def _client(*, with_token: bool = True) -> KisOrderClient:
     )
     c = KisOrderClient(settings)
     if with_token:
-        c._token = "tok"
-        c._token_exp = datetime.now(tz=UTC) + timedelta(hours=1)
+        # KisToken 메모리 캐시를 미리 채워 _headers 가 발급을 트리거하지 않게 한다.
+        c._token._token = "tok"
+        c._token._token_exp = datetime.now(tz=UTC) + timedelta(hours=1)
     return c
 
 
@@ -46,9 +47,9 @@ def test_token_issue_and_cache(monkeypatch: pytest.MonkeyPatch) -> None:
         calls["n"] += 1
         return {"access_token": "abc", "expires_in": 3600}
 
-    monkeypatch.setattr(c, "_request_token", fake_req)
-    assert c._ensure_token() == "abc"
-    assert c._ensure_token() == "abc"
+    monkeypatch.setattr(c._token, "_request", fake_req)
+    assert c._token.get() == "abc"
+    assert c._token.get() == "abc"
     assert calls["n"] == 1
 
 
@@ -56,7 +57,7 @@ def test_token_missing_keys_raises() -> None:
     """키 미설정이면 KisOrderError."""
     c = KisOrderClient(Settings(kis_appkey="", kis_appsecret=""))
     with pytest.raises(KisOrderError):
-        c._ensure_token()
+        c._token.get()
 
 
 def test_place_order_market_buy(monkeypatch: pytest.MonkeyPatch) -> None:
