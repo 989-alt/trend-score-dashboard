@@ -19,6 +19,7 @@ logs/
 
 # KIS OAuth 토큰 캐시 — 시크릿(절대 커밋 금지)
 data/.kis_token.json
+data/.trader_token.json
 
 # Telethon 세션 — 시크릿(텔레그램 계정 인증, 절대 커밋 금지)
 data/*.session
