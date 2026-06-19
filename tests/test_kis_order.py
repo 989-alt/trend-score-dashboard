@@ -20,8 +20,8 @@ from backend.trader.kis_order import KisOrderClient, KisOrderError
 def _client(*, with_token: bool = True) -> KisOrderClient:
     tmp = Path(tempfile.mkdtemp(prefix="tsd-trader-"))
     settings = Settings(
-        kis_app_key="k",
-        kis_app_secret="s",
+        kis_appkey="k",
+        kis_appsecret="s",
         kis_account="50190719",
         kis_account_prod="01",
         trader_token_path=tmp / ".tok.json",
@@ -54,7 +54,7 @@ def test_token_issue_and_cache(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_token_missing_keys_raises() -> None:
     """키 미설정이면 KisOrderError."""
-    c = KisOrderClient(Settings(kis_app_key="", kis_app_secret=""))
+    c = KisOrderClient(Settings(kis_appkey="", kis_appsecret=""))
     with pytest.raises(KisOrderError):
         c._ensure_token()
 
@@ -178,3 +178,15 @@ def test_inquire_orders_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
     o = orders[0]
     assert o.order_no == "0001" and o.side == "buy" and o.filled_qty == 10
     assert o.filled_price == Decimal("70000")
+
+
+def test_http_error_surfaces_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    """비-2xx 응답은 KIS 에러 본문을 KisOrderError 메시지에 담는다(진단용)."""
+    c = _client()
+    body = '{"rt_cd":"1","msg_cd":"40310000","msg1":"모의투자 미지원 TR"}'
+    resp = httpx.Response(500, text=body, request=httpx.Request("GET", "http://test"))
+    monkeypatch.setattr(c._client, "get", lambda path, headers=None, params=None: resp)
+    with pytest.raises(KisOrderError) as ei:
+        c.get_balance()
+    msg = str(ei.value)
+    assert "500" in msg and "미지원" in msg
