@@ -85,16 +85,21 @@ class KisOrderClient:
         self._token: str | None = None
         self._token_exp: datetime | None = None
         self._lock = threading.Lock()
-        self._cano = settings.trader_account.strip()
-        self._prod = (settings.trader_account_prod or "01").strip()
+        acct = settings.kis_account.strip()
+        if "-" in acct:
+            cano, prod = acct.split("-", 1)
+            self._cano, self._prod = cano.strip(), prod.strip()
+        else:
+            self._cano = acct
+            self._prod = (settings.kis_account_prod or "01").strip()
 
     # ── 토큰 (LiveProvider 패턴 재구현, 별도 토큰 파일) ──────────────────
     def _ensure_token(self) -> str:
         now = datetime.now(tz=UTC)
         if self._token and self._token_exp and now < self._token_exp:
             return self._token
-        if not (self._s.trader_app_key and self._s.trader_app_secret):
-            raise KisOrderError("모의 키 미설정 (TRADER_APP_KEY/TRADER_APP_SECRET)")
+        if not (self._s.kis_app_key and self._s.kis_app_secret):
+            raise KisOrderError("KIS 키 미설정 (KIS_APP_KEY/KIS_APP_SECRET)")
         with self._lock:
             now = datetime.now(tz=UTC)
             if self._token and self._token_exp and now < self._token_exp:
@@ -122,8 +127,8 @@ class KisOrderClient:
             "/oauth2/tokenP",
             json={
                 "grant_type": "client_credentials",
-                "appkey": self._s.trader_app_key,
-                "appsecret": self._s.trader_app_secret,
+                "appkey": self._s.kis_app_key,
+                "appsecret": self._s.kis_app_secret,
             },
         )
         resp.raise_for_status()
@@ -161,8 +166,8 @@ class KisOrderClient:
     def _headers(self, tr_id: str, *, hashkey: str | None = None) -> dict[str, str]:
         h = {
             "authorization": f"Bearer {self._ensure_token()}",
-            "appkey": self._s.trader_app_key,
-            "appsecret": self._s.trader_app_secret,
+            "appkey": self._s.kis_app_key,
+            "appsecret": self._s.kis_app_secret,
             "tr_id": tr_id,
             "custtype": "P",
         }
@@ -177,8 +182,8 @@ class KisOrderClient:
             "/uapi/hashkey",
             json=body,
             headers={
-                "appkey": self._s.trader_app_key,
-                "appsecret": self._s.trader_app_secret,
+                "appkey": self._s.kis_app_key,
+                "appsecret": self._s.kis_app_secret,
                 "content-type": "application/json; charset=utf-8",
             },
         )

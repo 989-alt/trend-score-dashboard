@@ -116,13 +116,11 @@ class Settings(BaseSettings):
     kis_token_path: Path = DATA_DIR / ".kis_token.json"
 
     # ── 모의 매매봇 (trend-trader, 전진검증) ──────────────────────────────
-    #: 모의계좌 KIS 키(시세 키와 분리 — 시드 5억 모의계좌). 시크릿 — .env, 커밋 금지.
-    trader_app_key: str = ""
-    trader_app_secret: str = ""
-    #: 모의계좌 — CANO(앞 8자리) + 상품코드(뒤 2자리, 보통 01).
-    trader_account: str = ""
-    trader_account_prod: str = "01"
-    #: 매매봇 토큰 디스크 캐시(시세 토큰과 분리). 시크릿 — gitignore.
+    #: KIS 앱 키는 1개로 실전·모의 도메인 공용 → 주문도 ``kis_app_key``/``kis_app_secret`` 재사용.
+    #: 모의계좌번호(KIS_ACCOUNT) — 예 "50190719". 상품코드는 kis_account_prod(기본 01).
+    kis_account: str = ""
+    kis_account_prod: str = "01"
+    #: 매매봇 토큰 디스크 캐시(모의 도메인 토큰 — 시세 real 토큰과 분리). 시크릿 — gitignore.
     trader_token_path: Path = DATA_DIR / ".trader_token.json"
 
     @property
