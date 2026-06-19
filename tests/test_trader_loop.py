@@ -1,0 +1,346 @@
+"""TraderLoop.run_once 단위테스트 — 가짜 주문클라이언트/스토어, 실제 TradeStore. 네트워크 0."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from decimal import Decimal
+from pathlib import Path
+
+from backend.config import Settings
+from backend.schemas import Grade, Market, ScoreEntry, SellReason, Snapshot
+from backend.trader.kis_order import KisOrderError
+from backend.trader.loop import TraderLoop
+from backend.trader.models import Balance, HoldingPosition, OrderResult, OrderSide, OrderStatus
+from backend.trader.positions import PositionManager
+from backend.trader.store import TradeStore
+from backend.trader.strategy import StrategyEngine
+
+#: 2026-06-22(월) 10:00 KST = 01:00 UTC — KR 정규장 개장 중(주문 가드 통과용).
+_NOW = datetime(2026, 6, 22, 1, 0, tzinfo=UTC)
+#: 장 마감 시각 — 같은 영업일 18:05 KST = 09:05 UTC(KR 마감 15:30 이후).
+_CLOSED = datetime(2026, 6, 22, 9, 5, tzinfo=UTC)
+
+
+def _entry(
+    ticker: str,
+    score: str,
+    *,
+    price: str = "10000",
+    grade: Grade = Grade.BUY,
+    eligible: bool = True,
+    sell_alert: bool = False,
+    sell_reason: SellReason | None = None,
+) -> ScoreEntry:
+    return ScoreEntry(
+        ticker=ticker,
+        name=ticker,
+        market="KR",
+        price=Decimal(price),
+        score=Decimal(score),
+        grade=grade,
+        eligible=eligible,
+        sell_alert=sell_alert,
+        sell_reason=sell_reason,
+    )
+
+
+class FakeStore:
+    """backend.store.Store 대역 — load_snapshot 만 제공."""
+
+    def __init__(self, snap: Snapshot | None) -> None:
+        self._snap = snap
+
+    def load_snapshot(self, market: Market) -> Snapshot | None:
+        return self._snap
+
+
+class FakeOrderClient:
+    """KisOrderClient 대역 — 잔고 고정, 주문은 기록(특정 종목은 에러 주입)."""
+
+    def __init__(
+        self,
+        balance: Balance,
+        *,
+        fail_ticker: str | None = None,
+        pending: list[OrderStatus] | None = None,
+        inquire_raises: bool = False,
+    ) -> None:
+        self._balance = balance
+        self._fail_ticker = fail_ticker
+        self._pending = pending or []
+        self._inquire_raises = inquire_raises
+        self.calls: list[tuple[str, OrderSide, int]] = []
+
+    def get_balance(self) -> Balance:
+        return self._balance
+
+    def inquire_orders(self, query_date: str) -> list[OrderStatus]:
+        if self._inquire_raises:
+            raise KisOrderError(f"주입 실패: 조회 {query_date}")
+        return self._pending
+
+    def place_order(
+        self,
+        ticker: str,
+        side: OrderSide,
+        qty: int,
+        *,
+        price: Decimal | None = None,
+        market: bool = True,
+    ) -> OrderResult:
+        if ticker == self._fail_ticker:
+            raise KisOrderError(f"주입 실패: {ticker}")
+        self.calls.append((ticker, side, qty))
+        return OrderResult(
+            order_no=f"O{len(self.calls)}",
+            org_no="6",
+            ticker=ticker,
+            side=side,
+            qty=qty,
+            submitted_at=_NOW,
+            message="ok",
+        )
+
+
+def _loop(
+    *,
+    snap: Snapshot | None,
+    balance: Balance,
+    tmp_path: Path,
+    top_n: int = 20,
+    fail_ticker: str | None = None,
+    settings: Settings | None = None,
+    pending: list[OrderStatus] | None = None,
+    inquire_raises: bool = False,
+) -> tuple[TraderLoop, FakeOrderClient, TradeStore]:
+    settings = settings or Settings(trader_top_n=top_n)
+    oc = FakeOrderClient(
+        balance, fail_ticker=fail_ticker, pending=pending, inquire_raises=inquire_raises
+    )
+    ts = TradeStore(tmp_path / "trading.db")
+    loop = TraderLoop(
+        settings,
+        "KR",
+        order_client=oc,  # type: ignore[arg-type]
+        store=FakeStore(snap),  # type: ignore[arg-type]
+        trade_store=ts,
+        engine=StrategyEngine(settings),
+        position_manager=PositionManager(),
+    )
+    return loop, oc, ts
+
+
+def _snap(entries: list[ScoreEntry]) -> Snapshot:
+    return Snapshot(market="KR", generated_at=_NOW, market_open=True, entries=entries)
+
+
+def test_run_once_places_buys_with_sized_qty(tmp_path: Path) -> None:
+    """매수: 목표금액 = total_eval*(1-buffer)/top_n, 가격별 수량 내림."""
+    snap = _snap([_entry("A", "90", price="10000"), _entry("B", "80", price="30000")])
+    balance = Balance(cash=Decimal("20000000"), total_eval=Decimal("20000000"), positions=[])
+    loop, oc, ts = _loop(snap=snap, balance=balance, tmp_path=tmp_path, top_n=20)
+
+    loop.run_once(_NOW)
+
+    # target_value = 20,000,000 * 0.95 / 20 = 950,000.
+    # A@10,000 → 95주, B@30,000 → 31주.
+    assert oc.calls == [("A", "buy", 95), ("B", "buy", 31)]
+    orders = ts.recent_orders()
+    assert len(orders) == 2
+    assert {o["ticker"] for o in orders} == {"A", "B"}
+    assert all(o["side"] == "buy" and o["reason"] == "진입:점수상위" for o in orders)
+
+
+def test_run_once_sells_before_buys(tmp_path: Path) -> None:
+    """매도가 매수보다 먼저 접수(현금 확보). 보유 손절 종목 매도 + 신규 매수."""
+    snap = _snap(
+        [
+            _entry("A", "90"),
+            _entry("H", "85", sell_alert=True, sell_reason="trailing_stop"),
+        ]
+    )
+    balance = Balance(
+        cash=Decimal("20000000"),
+        total_eval=Decimal("20000000"),
+        positions=[HoldingPosition(ticker="H", qty=7, avg_price=Decimal("10000"))],
+    )
+    loop, oc, ts = _loop(snap=snap, balance=balance, tmp_path=tmp_path, top_n=20)
+
+    loop.run_once(_NOW)
+
+    assert oc.calls[0] == ("H", "sell", 7)
+    assert ("A", "buy", 95) in oc.calls
+    sides = [c[1] for c in oc.calls]
+    assert sides.index("sell") < sides.index("buy")
+    reasons = {o["ticker"]: o["reason"] for o in ts.recent_orders()}
+    assert reasons["H"] == "청산:트레일링손절"
+
+
+def test_run_once_records_nav_snapshot(tmp_path: Path) -> None:
+    """NAV·포지션 스냅샷 기록(잔고 포지션 그대로)."""
+    snap = _snap([_entry("A", "90")])
+    balance = Balance(
+        cash=Decimal("19000000"),
+        total_eval=Decimal("20000000"),
+        positions=[HoldingPosition(ticker="A", qty=5, avg_price=Decimal("10000"))],
+    )
+    loop, _oc, ts = _loop(snap=snap, balance=balance, tmp_path=tmp_path, top_n=20)
+
+    loop.run_once(_NOW)
+
+    nav = ts.nav_series()
+    assert len(nav) == 1
+    assert nav[0]["total_eval"] == Decimal("20000000")
+    assert nav[0]["cash"] == Decimal("19000000")
+    latest = ts.latest_positions()
+    assert {p["ticker"] for p in latest} == {"A"}
+
+
+def test_run_once_isolates_failed_order(tmp_path: Path) -> None:
+    """한 종목 KisOrderError 가 루프를 중단시키지 않음(나머지 정상 접수)."""
+    snap = _snap([_entry("A", "90"), _entry("B", "80"), _entry("C", "70")])
+    balance = Balance(cash=Decimal("20000000"), total_eval=Decimal("20000000"), positions=[])
+    loop, oc, ts = _loop(snap=snap, balance=balance, tmp_path=tmp_path, top_n=20, fail_ticker="A")
+
+    loop.run_once(_NOW)
+
+    # A 는 실패 → 기록 안 됨. B, C 는 정상.
+    assert {c[0] for c in oc.calls} == {"B", "C"}
+    assert {o["ticker"] for o in ts.recent_orders()} == {"B", "C"}
+
+
+def test_run_once_no_snapshot_no_orders(tmp_path: Path) -> None:
+    """스냅샷 없음 → 주문·기록·NAV 전부 없음."""
+    loop, oc, ts = _loop(
+        snap=None,
+        balance=Balance(cash=Decimal("1"), total_eval=Decimal("1"), positions=[]),
+        tmp_path=tmp_path,
+    )
+
+    loop.run_once(_NOW)
+
+    assert oc.calls == []
+    assert ts.recent_orders() == []
+    assert ts.nav_series() == []
+
+
+def test_run_once_empty_entries_no_orders(tmp_path: Path) -> None:
+    """스냅샷은 있으나 entries 비면 스킵."""
+    loop, oc, ts = _loop(
+        snap=_snap([]),
+        balance=Balance(cash=Decimal("1"), total_eval=Decimal("1"), positions=[]),
+        tmp_path=tmp_path,
+    )
+
+    loop.run_once(_NOW)
+
+    assert oc.calls == []
+    assert ts.nav_series() == []
+
+
+def test_run_once_skips_nonpositive_price(tmp_path: Path) -> None:
+    """가격 0 이하 종목은 매수 스킵(사이징 불가)."""
+    snap = _snap([_entry("A", "90", price="0"), _entry("B", "80", price="10000")])
+    balance = Balance(cash=Decimal("20000000"), total_eval=Decimal("20000000"), positions=[])
+    loop, oc, _ts = _loop(snap=snap, balance=balance, tmp_path=tmp_path, top_n=20)
+
+    loop.run_once(_NOW)
+
+    assert {c[0] for c in oc.calls} == {"B"}
+
+
+# ── 리스크 가드 (P4) ──────────────────────────────────────────────────────
+
+
+def _pending(ticker: str, *, side: OrderSide = "buy", order_qty: int = 10) -> OrderStatus:
+    """미체결(주문>체결) 주문 1건."""
+    return OrderStatus(
+        order_no="P1", ticker=ticker, side=side, order_qty=order_qty, filled_qty=0, status="접수"
+    )
+
+
+def test_run_once_market_closed_records_nav_no_orders(tmp_path: Path) -> None:
+    """장 마감: 주문은 전부 스킵하되 NAV 스냅샷은 기록(연속성 유지)."""
+    snap = _snap(
+        [_entry("A", "90"), _entry("H", "85", sell_alert=True, sell_reason="trailing_stop")]
+    )
+    balance = Balance(
+        cash=Decimal("20000000"),
+        total_eval=Decimal("20000000"),
+        positions=[HoldingPosition(ticker="H", qty=7, avg_price=Decimal("10000"))],
+    )
+    loop, oc, ts = _loop(snap=snap, balance=balance, tmp_path=tmp_path, top_n=20)
+
+    loop.run_once(_CLOSED)
+
+    assert oc.calls == []
+    assert ts.recent_orders() == []
+    nav = ts.nav_series()
+    assert len(nav) == 1
+    assert nav[0]["total_eval"] == Decimal("20000000")
+
+
+def test_run_once_kill_switch_skips_buys_keeps_sells(tmp_path: Path) -> None:
+    """킬스위치 ON: 신규 매수는 스킵, 매도(손절)는 계속 접수."""
+    snap = _snap(
+        [_entry("A", "90"), _entry("H", "85", sell_alert=True, sell_reason="trailing_stop")]
+    )
+    balance = Balance(
+        cash=Decimal("20000000"),
+        total_eval=Decimal("20000000"),
+        positions=[HoldingPosition(ticker="H", qty=7, avg_price=Decimal("10000"))],
+    )
+    settings = Settings(trader_top_n=20, trader_kill_switch=True)
+    loop, oc, ts = _loop(snap=snap, balance=balance, tmp_path=tmp_path, settings=settings)
+
+    loop.run_once(_NOW)
+
+    assert oc.calls == [("H", "sell", 7)]
+    assert {o["ticker"] for o in ts.recent_orders()} == {"H"}
+
+
+def test_run_once_halt_file_skips_buys(tmp_path: Path) -> None:
+    """halt 파일 존재: 신규 매수 스킵(매도는 계속)."""
+    halt = tmp_path / ".trader_halt"
+    halt.write_text("stop", encoding="utf-8")
+    snap = _snap(
+        [_entry("A", "90"), _entry("H", "85", sell_alert=True, sell_reason="trailing_stop")]
+    )
+    balance = Balance(
+        cash=Decimal("20000000"),
+        total_eval=Decimal("20000000"),
+        positions=[HoldingPosition(ticker="H", qty=7, avg_price=Decimal("10000"))],
+    )
+    settings = Settings(trader_top_n=20, trader_halt_file=halt)
+    loop, oc, _ts = _loop(snap=snap, balance=balance, tmp_path=tmp_path, settings=settings)
+
+    loop.run_once(_NOW)
+
+    assert oc.calls == [("H", "sell", 7)]
+
+
+def test_run_once_skips_pending_ticker(tmp_path: Path) -> None:
+    """당일 미체결 종목은 재주문 스킵(다른 종목은 정상 접수)."""
+    snap = _snap([_entry("A", "90"), _entry("B", "80")])
+    balance = Balance(cash=Decimal("20000000"), total_eval=Decimal("20000000"), positions=[])
+    loop, oc, ts = _loop(
+        snap=snap, balance=balance, tmp_path=tmp_path, top_n=20, pending=[_pending("A")]
+    )
+
+    loop.run_once(_NOW)
+
+    assert {c[0] for c in oc.calls} == {"B"}
+    assert {o["ticker"] for o in ts.recent_orders()} == {"B"}
+
+
+def test_run_once_inquire_error_fails_open(tmp_path: Path) -> None:
+    """당일 주문 조회 실패 → fail-open(멱등 가드 우회, 주문은 계속)."""
+    snap = _snap([_entry("A", "90"), _entry("B", "80")])
+    balance = Balance(cash=Decimal("20000000"), total_eval=Decimal("20000000"), positions=[])
+    loop, oc, _ts = _loop(
+        snap=snap, balance=balance, tmp_path=tmp_path, top_n=20, inquire_raises=True
+    )
+
+    loop.run_once(_NOW)
+
+    assert {c[0] for c in oc.calls} == {"A", "B"}

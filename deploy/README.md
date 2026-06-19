@@ -90,3 +90,55 @@ gh workflow run deploy-pages.yml        # 재빌드·재배포
 - **장외**: 장 마감/개장 전엔 당일 거래대금 0 → 하드필터 통과 0(빈 보드). 장중에 실데이터가 채워진다.
 
 > 봇과 **별도 KIS 시세키(조회 전용)** 권장. `.env`·`data/.kis_token.json` 절대 커밋 금지(이미 gitignore).
+
+---
+
+## 6. 모의 매매봇 (trend-trader) — P7 전진검증
+
+대시보드(`trend-board.service`)와 **별도 프로세스**로 KIS 모의 매매 루프를 1분(기본) 주기로 돈다.
+대시보드가 쓴 점수 스냅샷(`data/dashboard.db`)을 읽어 진입/청산을 결정하고, 결과를
+`data/trading.db`(TradeStore)에 기록한다. 대시보드 "매매 현황" 탭이 그 DB 를 읽어 보여준다.
+
+### 6-1. 서버 준비
+
+```bash
+ssh ubuntu@<OCI_PUBLIC_IP>
+cd /home/ubuntu/trend-score-dashboard
+git pull
+uv sync                                   # 의존성 갱신
+mkdir -p logs
+# .env 확인 — 매매봇은 KIS 키 + 모의계좌가 필요(대시보드 .env 에 함께 둔다):
+#   KIS_APP_KEY=...        # 모의 도메인 공용 키
+#   KIS_APP_SECRET=...
+#   KIS_ACCOUNT=50190719   # 모의계좌번호(상품코드 기본 01 = KIS_ACCOUNT_PROD)
+#   TRADER_LOOP_SEC=60     # (선택) 루프 주기 초, 기본 60·최소 10
+# 인라인 주석 금지(systemd 가 주석을 값으로 읽음). chmod 600 .env.
+```
+
+### 6-2. systemd 유닛 설치/기동
+
+```bash
+sudo cp deploy/systemd/trend-trader.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now trend-trader.service
+journalctl -u trend-trader -f            # "매매봇 시작 — markets=('KR',) …" + 사이클 로그 확인
+```
+
+- 유닛은 `.venv/bin/python scripts/run_trader.py` 로 실행(trend-board 와 동일 방식).
+  `uv` 로 띄우려면 ExecStart 를 `uv run python scripts/run_trader.py` 로 바꾼다.
+- `Restart=on-failure`, `RestartSec=10` — 사이클 1회 실패는 봇이 자체 흡수(로그만), 프로세스
+  크래시 시에만 재시작.
+
+### 6-3. 국장 가동 전 점검 (월요일 09:00 개장 전)
+
+- **swing-bot 잔고 청산**: 같은 모의계좌(50190719)를 swing-bot 이 쓰고 있었다면, 보유 종목이
+  남아 있으면 매매봇이 그 보유를 자기 포지션으로 동기화한다. 개장 전 swing-bot 쪽에서 전량
+  청산해 **깨끗한 시드(5억)**에서 시작한다.
+- 봇은 **장중에만 주문**(`market_hours` 게이트), 장 마감엔 NAV 스냅샷만 기록한다.
+- 킬스위치: 운영 중 매수만 멈추려면 `touch data/.trader_halt`(매도·손절은 계속), 해제는
+  `rm data/.trader_halt`. 재배포 불필요.
+
+### 6-4. 검증
+
+- `journalctl -u trend-trader -f` 에서 매 주기 사이클 요약 로그(경고 없이) 확인.
+- 대시보드 **"매매 현황" 탭**에서 NAV 추이·보유 종목·최근 주문이 채워지는지 확인(개장 후).

@@ -4,19 +4,33 @@ import type {
   InvestorFlow,
   Market,
   MergedTheme,
+  NavPoint,
   NewsIssue,
   NewsIssuesData,
   RawFactorBreakdown,
   RawInvestorFlow,
+  RawNavPoint,
   RawNewsIssue,
   RawNewsIssuesResponse,
   RawScoreEntry,
   RawSnapshot,
   RawThemesResponse,
+  RawTradingNavResponse,
+  RawTradingOrder,
+  RawTradingOrdersResponse,
+  RawTradingPosition,
+  RawTradingPositionsResponse,
+  RawTradingStatus,
   RawWeeklyResponse,
   ScoreEntry,
   Snapshot,
   ThemesData,
+  TradingNavData,
+  TradingOrder,
+  TradingOrdersData,
+  TradingPosition,
+  TradingPositionsData,
+  TradingStatus,
   WeeklyData,
 } from "./types";
 
@@ -268,6 +282,106 @@ export async function fetchNewsWeekly(signal?: AbortSignal): Promise<WeeklyData>
     weekStart: raw.week_start,
     krMarkdown: raw.kr_markdown,
     generatedAt: raw.generated_at,
+    disclaimer: raw.disclaimer,
+  };
+}
+
+// ── 매매 현황(trading) ──────────────────────────────────────────────────────
+function tradingStatusUrl(): string {
+  if (API_BASE) return `${API_BASE}/api/trading/status`;
+  if (STATIC_DEMO) return `${BASE}data/trading-status.json`;
+  return "/api/trading/status";
+}
+
+function tradingPositionsUrl(): string {
+  if (API_BASE) return `${API_BASE}/api/trading/positions`;
+  if (STATIC_DEMO) return `${BASE}data/trading-positions.json`;
+  return "/api/trading/positions";
+}
+
+function tradingHistoryUrl(limit: number): string {
+  if (API_BASE) return `${API_BASE}/api/trading/history?limit=${limit}`;
+  if (STATIC_DEMO) return `${BASE}data/trading-history.json`;
+  return `/api/trading/history?limit=${limit}`;
+}
+
+function tradingNavUrl(limit: number): string {
+  if (API_BASE) return `${API_BASE}/api/trading/nav?limit=${limit}`;
+  if (STATIC_DEMO) return `${BASE}data/trading-nav.json`;
+  return `/api/trading/nav?limit=${limit}`;
+}
+
+function parseTradingPosition(r: RawTradingPosition): TradingPosition {
+  return {
+    ticker: r.ticker,
+    name: r.name,
+    qty: r.qty,
+    avgPrice: toNum(r.avg_price),
+    curPrice: toNum(r.cur_price),
+    evalAmount: toNum(r.eval_amount),
+    pnlAmount: toNum(r.pnl_amount),
+    pnlPct: toNum(r.pnl_pct),
+  };
+}
+
+function parseNavPoint(r: RawNavPoint): NavPoint {
+  return {
+    ts: r.ts,
+    totalEval: toNum(r.total_eval),
+    cash: toNum(r.cash),
+  };
+}
+
+export async function fetchTradingStatus(signal?: AbortSignal): Promise<TradingStatus> {
+  const raw = await getJson<RawTradingStatus>(tradingStatusUrl(), signal);
+  return {
+    running: Boolean(raw.running),
+    totalEval: toNum(raw.total_eval),
+    cash: toNum(raw.cash),
+    positionCount: raw.position_count ?? 0,
+    totalPnl: toNum(raw.total_pnl),
+    asOf: raw.as_of ?? null,
+    disclaimer: raw.disclaimer,
+  };
+}
+
+export async function fetchTradingPositions(
+  signal?: AbortSignal,
+): Promise<TradingPositionsData> {
+  const raw = await getJson<RawTradingPositionsResponse>(tradingPositionsUrl(), signal);
+  return {
+    positions: (raw.positions ?? []).map(parseTradingPosition),
+    disclaimer: raw.disclaimer,
+  };
+}
+
+export async function fetchTradingHistory(
+  limit = 50,
+  signal?: AbortSignal,
+): Promise<TradingOrdersData> {
+  const raw = await getJson<RawTradingOrdersResponse>(tradingHistoryUrl(limit), signal);
+  return {
+    orders: (raw.orders ?? []).map(
+      (o: RawTradingOrder): TradingOrder => ({
+        ts: o.ts,
+        ticker: o.ticker,
+        side: o.side,
+        qty: o.qty,
+        reason: o.reason,
+        message: o.message,
+      }),
+    ),
+    disclaimer: raw.disclaimer,
+  };
+}
+
+export async function fetchTradingNav(
+  limit = 2000,
+  signal?: AbortSignal,
+): Promise<TradingNavData> {
+  const raw = await getJson<RawTradingNavResponse>(tradingNavUrl(limit), signal);
+  return {
+    nav: (raw.nav ?? []).map(parseNavPoint),
     disclaimer: raw.disclaimer,
   };
 }

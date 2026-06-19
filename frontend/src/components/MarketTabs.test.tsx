@@ -8,9 +8,9 @@ describe("MarketTabs", () => {
   it("gives each tab a stable id and points it at the shared tabpanel", () => {
     render(<MarketTabs active="kr" onChange={() => {}} />);
     const tabs = screen.getAllByRole("tab");
-    expect(tabs).toHaveLength(4);
+    expect(tabs).toHaveLength(5);
     for (const tab of tabs) {
-      expect(tab.id).toMatch(/^tab-(themes|kr|us|news)$/);
+      expect(tab.id).toMatch(/^tab-(themes|kr|us|news|trading)$/);
       expect(tab).toHaveAttribute("aria-controls", TABPANEL_ID);
     }
   });

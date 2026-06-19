@@ -56,6 +56,16 @@ from backend.schemas import (
 )
 from backend.store import Store
 from backend.themes import ThemeDef, load_themes
+from backend.trader.api_models import (
+    NavPoint,
+    TradingNavResponse,
+    TradingOrder,
+    TradingOrdersResponse,
+    TradingPosition,
+    TradingPositionsResponse,
+    TradingStatus,
+)
+from backend.trader.store import TradeStore
 
 #: 정적 SPA 산출물 경로(존재 시 마운트).
 _FRONTEND_DIST = ROOT_DIR / "frontend" / "dist"
@@ -65,6 +75,12 @@ _SEOUL = ZoneInfo("Asia/Seoul")
 
 #: 데이터 갱신 대상 시장.
 _MARKETS: tuple[Market, ...] = ("KR", "US")
+
+#: 매매봇 '가동 중' 판정 윈도 — 최신 NAV ts 가 현재로부터 이 시간 이내면 running.
+_TRADER_FRESH = timedelta(minutes=10)
+
+#: ``GET /api/trading/history`` limit 상한.
+_HISTORY_LIMIT_MAX = 200
 
 
 def _resolve_market(value: str) -> Market:
@@ -101,6 +117,25 @@ def _get_snapshot(market: Market, store: Store) -> Snapshot:
     return existing if existing is not None else _empty_snapshot(market)
 
 
+def _trader_running(nav: list[dict[str, object]], positions_count: int, now: datetime) -> bool:
+    """가동 여부 — 최신 NAV ts 가 ``_TRADER_FRESH`` 이내면 True.
+
+    NAV 가 비었으면 (봇 미가동/막 시작) 보유 포지션 존재로 폴백한다. ts 파싱 실패나
+    naive datetime 은 보수적으로 처리(naive → Seoul 가정).
+    """
+    if nav:
+        raw = nav[-1].get("ts")
+        if isinstance(raw, str):
+            try:
+                last = datetime.fromisoformat(raw)
+            except ValueError:
+                return positions_count > 0
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=_SEOUL)
+            return now - last <= _TRADER_FRESH
+    return positions_count > 0
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     """앱 팩토리 — CORS·라우트·정적 마운트·lifespan 훅을 구성해 반환한다."""
     cfg = settings or get_settings()
@@ -114,6 +149,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """
         store = Store(cfg.db_path)
         news_store = NewsStore(cfg.news_db_path)
+        # 매매봇 TradeStore(읽기전용 표시). 테이블을 생성하므로 봇 미가동 시엔 빈 읽기 = 안전.
+        trade_store = TradeStore(cfg.trader_db_path)
         severity = load_severity(cfg.news_severity_path)
         themes: list[ThemeDef] = load_themes(cfg.themes_path)
         scheduler: AsyncIOScheduler = sched.build_scheduler(store, cfg, news_store)
@@ -131,6 +168,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         application.state.settings = cfg
         application.state.store = store
         application.state.news_store = news_store
+        application.state.trade_store = trade_store
         application.state.severity = severity
         application.state.themes = themes
         application.state.scheduler = scheduler
@@ -282,6 +320,63 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             generated_at=weekly.generated_at if weekly else None,
             disclaimer=DISCLAIMER,
         )
+
+    @application.get("/api/trading/status", response_model=TradingStatus)
+    async def trading_status() -> TradingStatus:
+        """모의 매매봇 현황 — 가동 여부 + 최신 NAV·포지션 요약(읽기전용). 면책 포함.
+
+        봇이 아직 안 돌았으면 빈 TradeStore 라 모든 필드 None/0 · running=False.
+        """
+        trade_store: TradeStore = application.state.trade_store
+        positions = trade_store.latest_positions()
+        nav = trade_store.nav_series()
+        now = datetime.now(tz=_SEOUL)
+        latest_nav = nav[-1] if nav else None
+        pnls = [p["pnl_amount"] for p in positions if p["pnl_amount"] is not None]
+        total_pnl = sum(pnls, Decimal("0")) if pnls else None
+        return TradingStatus(
+            running=_trader_running(nav, len(positions), now),
+            total_eval=latest_nav["total_eval"] if latest_nav else None,
+            cash=latest_nav["cash"] if latest_nav else None,
+            position_count=len(positions),
+            total_pnl=total_pnl,
+            as_of=latest_nav["ts"] if latest_nav else None,
+            disclaimer=DISCLAIMER,
+        )
+
+    @application.get("/api/trading/positions", response_model=TradingPositionsResponse)
+    async def trading_positions() -> TradingPositionsResponse:
+        """최신 스냅샷의 보유 종목(읽기전용). 면책 포함."""
+        trade_store: TradeStore = application.state.trade_store
+        positions = [TradingPosition(**p) for p in trade_store.latest_positions()]
+        return TradingPositionsResponse(positions=positions, disclaimer=DISCLAIMER)
+
+    @application.get("/api/trading/history", response_model=TradingOrdersResponse)
+    async def trading_history(
+        limit: int = Query(50, ge=1, le=_HISTORY_LIMIT_MAX),
+    ) -> TradingOrdersResponse:
+        """최근 주문 접수 기록(최신순, 읽기전용). 면책 포함."""
+        trade_store: TradeStore = application.state.trade_store
+        # recent_orders 는 order_no 도 주지만 표시 모델엔 불필요 → 필요한 키만 추린다.
+        orders = [
+            TradingOrder(
+                ts=o["ts"],
+                ticker=o["ticker"],
+                side=o["side"],
+                qty=o["qty"],
+                reason=o["reason"],
+                message=o["message"],
+            )
+            for o in trade_store.recent_orders(limit)
+        ]
+        return TradingOrdersResponse(orders=orders, disclaimer=DISCLAIMER)
+
+    @application.get("/api/trading/nav", response_model=TradingNavResponse)
+    async def trading_nav(limit: int = Query(2000, ge=1, le=5000)) -> TradingNavResponse:
+        """NAV(총평가) 시계열(오래된→최신, 읽기전용). 면책 포함."""
+        trade_store: TradeStore = application.state.trade_store
+        nav = [NavPoint(**n) for n in trade_store.nav_series(limit)]
+        return TradingNavResponse(nav=nav, disclaimer=DISCLAIMER)
 
     # 정적 SPA — 산출물이 있으면 마운트, 없으면 루트 JSON 안내를 노출(API 전용).
     if _FRONTEND_DIST.is_dir():

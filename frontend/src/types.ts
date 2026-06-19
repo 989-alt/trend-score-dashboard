@@ -302,3 +302,108 @@ export interface WeeklyData {
   generatedAt: string | null;
   disclaimer: string;
 }
+
+// ── 매매 현황(trading) 탭 ──────────────────────────────────────────────────
+// Raw shapes (API JSON; Decimal 은 string 으로 올 수 있음 — see backend/trader/api_models.py).
+export interface RawTradingStatus {
+  running: boolean;
+  total_eval?: Num;
+  cash?: Num;
+  position_count?: number;
+  total_pnl?: Num;
+  as_of?: string | null;
+  disclaimer: string;
+}
+
+export interface RawTradingPosition {
+  ticker: string;
+  name: string;
+  qty: number;
+  avg_price: Num;
+  cur_price?: Num;
+  eval_amount?: Num;
+  pnl_amount?: Num;
+  pnl_pct?: Num;
+}
+
+export interface RawTradingPositionsResponse {
+  positions: RawTradingPosition[];
+  disclaimer: string;
+}
+
+export interface RawTradingOrder {
+  ts: string;
+  ticker: string;
+  side: string;
+  qty: number;
+  reason: string;
+  message: string;
+}
+
+export interface RawTradingOrdersResponse {
+  orders: RawTradingOrder[];
+  disclaimer: string;
+}
+
+export interface RawNavPoint {
+  ts: string;
+  total_eval?: Num;
+  cash?: Num;
+}
+
+export interface RawTradingNavResponse {
+  nav: RawNavPoint[];
+  disclaimer: string;
+}
+
+// Normalized shapes (consumed by components). Decimals are number|null.
+export interface TradingStatus {
+  running: boolean;
+  totalEval: number | null;
+  cash: number | null;
+  positionCount: number;
+  totalPnl: number | null;
+  asOf: string | null;
+  disclaimer: string;
+}
+
+export interface TradingPosition {
+  ticker: string;
+  name: string;
+  qty: number;
+  avgPrice: number | null;
+  curPrice: number | null;
+  evalAmount: number | null;
+  pnlAmount: number | null;
+  pnlPct: number | null;
+}
+
+export interface TradingOrder {
+  ts: string;
+  ticker: string;
+  side: string;
+  qty: number;
+  reason: string;
+  message: string;
+}
+
+export interface NavPoint {
+  ts: string;
+  totalEval: number | null;
+  cash: number | null;
+}
+
+export interface TradingPositionsData {
+  positions: TradingPosition[];
+  disclaimer: string;
+}
+
+export interface TradingOrdersData {
+  orders: TradingOrder[];
+  disclaimer: string;
+}
+
+export interface TradingNavData {
+  nav: NavPoint[];
+  disclaimer: string;
+}

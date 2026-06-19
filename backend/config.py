@@ -115,6 +115,26 @@ class Settings(BaseSettings):
     #: KIS OAuth 토큰 디스크 캐시(시크릿 — .gitignore). 재시작·다중 프로세스 간 토큰 재사용.
     kis_token_path: Path = DATA_DIR / ".kis_token.json"
 
+    # ── 모의 매매봇 (trend-trader, 전진검증) ──────────────────────────────
+    #: KIS 앱 키는 1개로 실전·모의 도메인 공용 → 주문도 ``kis_app_key``/``kis_app_secret`` 재사용.
+    #: 모의계좌번호(KIS_ACCOUNT) — 예 "50190719". 상품코드는 kis_account_prod(기본 01).
+    kis_account: str = ""
+    kis_account_prod: str = "01"
+    #: 매매봇 토큰 디스크 캐시(모의 도메인 토큰 — 시세 real 토큰과 분리). 시크릿 — gitignore.
+    trader_token_path: Path = DATA_DIR / ".trader_token.json"
+    #: 매매봇 TradeStore 경로(대시보드가 읽기). 봇이 쓰고 API 가 읽는다(WAL).
+    trader_db_path: Path = DATA_DIR / "trading.db"
+    #: 보유 종목 수(점수 상위 N 진입). 목표금액 = 가용평가액 ÷ N.
+    trader_top_n: int = Field(default=20, ge=1)
+    #: 매매 루프 주기(초). 1분 기본, 최소 10초(과도한 폴링·중복주문 방지).
+    trader_loop_sec: int = Field(default=60, ge=10)
+    #: 현금버퍼 비율(평가액 중 미투자 여유). 슬리피지·체결지연 흡수.
+    trader_cash_buffer: Decimal = Decimal("0.05")
+    #: 킬스위치 — True 면 신규 매수 중단(매도·손절은 계속 = 리스크 축소).
+    trader_kill_switch: bool = False
+    #: 이 파일이 존재해도 신규 매수 중단(재배포 없이 운영 중단용 — touch/rm 로 토글).
+    trader_halt_file: Path = DATA_DIR / ".trader_halt"
+
     @property
     def cors_origin_list(self) -> list[str]:
         """CORS 오리진 문자열 → 리스트."""
