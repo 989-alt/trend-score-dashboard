@@ -122,6 +122,8 @@ class Settings(BaseSettings):
     kis_account_prod: str = "01"
     #: 매매봇 토큰 디스크 캐시(모의 도메인 토큰 — 시세 real 토큰과 분리). 시크릿 — gitignore.
     trader_token_path: Path = DATA_DIR / ".trader_token.json"
+    #: 매매봇 TradeStore 경로(대시보드가 읽기). 봇이 쓰고 API 가 읽는다(WAL).
+    trader_db_path: Path = DATA_DIR / "trading.db"
     #: 보유 종목 수(점수 상위 N 진입). 목표금액 = 가용평가액 ÷ N.
     trader_top_n: int = Field(default=20, ge=1)
     #: 현금버퍼 비율(평가액 중 미투자 여유). 슬리피지·체결지연 흡수.
