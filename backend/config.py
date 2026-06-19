@@ -41,7 +41,9 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
     cors_origins: str = "http://localhost:5173"
-    refresh_interval_min: int = 30
+    #: intraday 스냅샷 갱신 주기(분). 1=실시간(장중에만 산출·일봉캐시 재사용 → 시세만 신선).
+    #: KIS 일일쿼터·yfinance throttle 부담 시 2~5 로 상향(graceful degradation 으로 안전).
+    refresh_interval_min: int = 1
 
     # ── 라이브 스캔 성능 ───────────────────────────────────────────────
     #: 유니버스 = 거래대금 상위 N(KR). 전 종목 대신 유동성 상위만 스캔해 속도 확보.
@@ -137,6 +139,16 @@ class Settings(BaseSettings):
     trader_kill_switch: bool = False
     #: 이 파일이 존재해도 신규 매수 중단(재배포 없이 운영 중단용 — touch/rm 로 토글).
     trader_halt_file: Path = DATA_DIR / ".trader_halt"
+    #: 매수 종목 선정을 Gemini 2.5 Pro 에 위임(분석=스크립트, 결정=LLM, 실행=KIS). False 면
+    #: 결정론 점수상위(현 동작). 손절 등 안전 게이트는 LLM 무관하게 항상 적용. 키 없거나 실패 시
+    #: 자동 폴백(결정론) — 매매가 멈추지 않음.
+    trader_use_llm: bool = True
+    #: 입력 동일 시 Gemini 재호출 생략(입력해시 캐시). 무체결·시세무변동이면 같은 입력 → 캐시.
+    #: 체결로 포지션/현금 변하거나 1분 스냅샷으로 점수 변하면 키가 바뀌어 재결정.
+    trader_llm_cache: bool = True
+    #: 매수 결정용 Gemini 모델. 결정=적격후보 중 선별이라 flash 로 충분(4주 ~$6) — pro 는 ~$200.
+    #: 더 저렴=gemini-2.0-flash / 최고품질=gemini-2.5-pro (GEMINI_MODEL_DECISION 로 교체).
+    gemini_model_decision: str = "gemini-2.5-flash"
 
     @property
     def cors_origin_list(self) -> list[str]:

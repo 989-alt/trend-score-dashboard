@@ -45,8 +45,10 @@ def test_compute_portfolio_metrics_skips_none_total_eval(tmp_path: Path) -> None
     """total_eval=None 행은 제외하고 유효 2점으로 산출."""
     store = TradeStore(tmp_path / "t.db")
     start = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
-    # nav 테이블에 total_eval NULL 행을 직접 넣어 None 필터 경로 검증.
-    store._conn.execute("INSERT INTO nav VALUES (?, ?, ?)", (start.isoformat(), None, None))
+    # nav 테이블에 total_eval NULL 행을 직접 넣어 None 필터 경로 검증.(market 컬럼 포함)
+    store._conn.execute(
+        "INSERT INTO nav VALUES (?, ?, ?, ?)", (start.isoformat(), "KR", None, None)
+    )
     store._conn.commit()
     _snap(store, start + timedelta(days=10), Decimal("100"))
     _snap(store, start + timedelta(days=20), Decimal("110"))

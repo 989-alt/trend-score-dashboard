@@ -144,6 +144,46 @@ def test_status_summary(populated_client: TestClient) -> None:
     assert body["as_of"] is not None
 
 
+@pytest.fixture
+def multi_market_client(tmp_path: Path) -> Iterator[TestClient]:
+    """KR(5억)·US($0) NAV 를 같은 ts 로 기록 — 헤드라인이 KR 인지 검증용."""
+    store = TradeStore(tmp_path / "trading.db")
+    now = datetime.now(tz=UTC)
+    store.record_snapshot(
+        now,
+        market="KR",
+        total_eval=Decimal("500000000"),
+        cash=Decimal("499290000"),
+        positions=[],
+    )
+    store.record_snapshot(
+        now, market="US", total_eval=Decimal("0"), cash=Decimal("0"), positions=[]
+    )
+    client = _make_client(tmp_path)
+    try:
+        yield client
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_status_headline_uses_kr_not_us_zero(multi_market_client: TestClient) -> None:
+    """다중시장: 헤드라인 cash/total_eval 은 KR(5억)이지 US($0)가 아니다(P10 버그픽스)."""
+    resp = multi_market_client.get("/api/trading/status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert Decimal(body["total_eval"]) == Decimal("500000000")
+    assert Decimal(body["cash"]) == Decimal("499290000")
+
+
+def test_nav_chart_uses_kr_only(multi_market_client: TestClient) -> None:
+    """NAV 차트도 KR 만(미장 $0 혼입 방지)."""
+    resp = multi_market_client.get("/api/trading/nav")
+    assert resp.status_code == 200
+    nav = resp.json()["nav"]
+    assert len(nav) == 1
+    assert Decimal(nav[0]["total_eval"]) == Decimal("500000000")
+
+
 def test_empty_db_endpoints_ok(empty_client: TestClient) -> None:
     """봇 미가동(빈 DB) — 전 엔드포인트 200 · 빈 리스트/None · 크래시 없음."""
     positions = empty_client.get("/api/trading/positions")
