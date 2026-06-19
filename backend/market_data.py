@@ -654,6 +654,10 @@ _NAVER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 _NAVER_ROW_RE = re.compile(
     r'<a href="/item/main\.naver\?code=(\d{6})"[^>]*class="tltle"[^>]*>([^<]+)</a>'
 )
+#: 네이버 ETF 목록(itemcode) — 유니버스 ETF 제외용(KRX 비의존). itemcode 는 ASCII.
+_NAVER_ETF_LIST = "https://finance.naver.com/api/sise/etfItemList.nhn"
+#: 유니버스 캐시 스키마 버전 — 유니버스 로직 변경 시 +1 하면 구버전 캐시가 자동 무효화(재수집)된다.
+_UNIVERSE_CACHE_VERSION = 2
 
 #: RS(지수대비 상대강도) 분모 지수 심볼(yfinance). KR=KOSPI, US=S&P500.
 #: pykrx 지수는 데이터센터 IP 에서 KRX 403 → 양 시장 모두 yfinance 로 일원화.
@@ -1129,22 +1133,21 @@ class LiveProvider:
         return _universe_from_themes(self._settings.themes_path, market)
 
     def _fetch_universe_kr(self) -> list[str]:
-        """네이버 시총 상위 N 티커 (일1회 디스크 캐시). 실패 시 빈 리스트(→ themes fallback).
+        """네이버 시총 상위 N **보통주** (일1회 디스크 캐시). 실패 시 빈 리스트 → themes fallback.
 
         pykrx·FDR 의 KRX(``data.krx.co.kr``) 소스가 throttle/차단으로 불안정 → **KRX 비의존**
-        네이버 금융 시가총액 순위로 enumeration. **종목명도 같은 페이지에서 얻어** ``_kr_names``
-        에 채운다(KRX/pykrx 비의존 표시명). 캐시는 ``{코드: 종목명}`` 매핑으로 저장해 캐시 적중
-        (재시작 등)에도 표시명을 복원한다. 실패는 빈 리스트로 흡수 → themes.yml graceful degrade.
+        네이버 금융 시가총액 순위로 enumeration. **ETF·우선주 제외**(개별 보통주만). **종목명도
+        같은 페이지에서 얻어** ``_kr_names`` 에 채운다. 캐시는 ``{v, stocks:{코드:종목명}}`` 으로
+        저장 — 캐시 적중(재시작)에도 표시명을 복원하고, **스키마 버전이 바뀌면 자동 무효화**(재수집)
+        되어 배포 시 수동 캐시삭제 불필요. 실패는 빈 리스트로 흡수 → themes.yml fallback.
         """
         today = _market_today("KR")
         cached = self._daily.get("KR", _UNIVERSE_SENTINEL, today, _CACHE_UNIVERSE)
         if cached:
-            loaded = json.loads(cached)
-            if isinstance(loaded, dict) and loaded:  # {코드: 종목명}
-                self._absorb_names(loaded.items())
-                return [str(code) for code in loaded]
-            if isinstance(loaded, list) and loaded:  # 구형식(코드만) 하위호환
-                return [str(t) for t in loaded]
+            stocks = self._parse_universe_cache(cached)
+            if stocks:
+                self._absorb_names(stocks.items())
+                return list(stocks)
         pairs = self._naver_universe_kr()
         if pairs:
             self._absorb_names(pairs)
@@ -1153,10 +1156,22 @@ class LiveProvider:
                 _UNIVERSE_SENTINEL,
                 today,
                 _CACHE_UNIVERSE,
-                json.dumps(dict(pairs), ensure_ascii=False),
+                json.dumps(
+                    {"v": _UNIVERSE_CACHE_VERSION, "stocks": dict(pairs)}, ensure_ascii=False
+                ),
             )
             return [code for code, _ in pairs]
         return []
+
+    @staticmethod
+    def _parse_universe_cache(cached: str) -> dict[str, str]:
+        """유니버스 캐시 JSON → ``{코드: 종목명}``. 버전 불일치/구형식이면 빈 dict(=재수집 유도)."""
+        loaded = json.loads(cached)
+        if isinstance(loaded, dict) and loaded.get("v") == _UNIVERSE_CACHE_VERSION:
+            stocks = loaded.get("stocks")
+            if isinstance(stocks, dict) and stocks:
+                return {str(k): str(v) for k, v in stocks.items()}
+        return {}
 
     def _absorb_names(self, pairs: Iterable[tuple[str, str]]) -> None:
         """(코드, 종목명) 쌍을 ``_kr_names`` 에 채운다(빈 이름은 건너뜀, 기존값 보존)."""
@@ -1165,17 +1180,17 @@ class LiveProvider:
                 self._kr_names.setdefault(str(code), str(name))
 
     def _naver_universe_kr(self) -> list[tuple[str, str]]:
-        """네이버 금융 시가총액 순위 → KOSPI∪KOSDAQ (종목코드, 종목명) 쌍. 실패는 빈 리스트.
+        """네이버 시가총액 순위 → KOSPI∪KOSDAQ (종목코드, 종목명) — **ETF·우선주 제외**.
 
-        ``live_universe_top_n`` 을 KOSPI:KOSDAQ ≈ 2:1 로 배분(대형주 KOSPI 편중). 각 시장
-        시총 내림차순 페이지(50종목)에서 코드+종목명을 추출·중복 제거(코드 기준)한다.
-        유동성은 점수 단계의 거래대금 하드필터가 거른다.
+        ``live_universe_top_n`` 을 KOSPI:KOSDAQ ≈ 2:1 로 배분(대형주 KOSPI 편중). ETF(네이버
+        ETF 목록)·우선주(코드 끝자리 ≠ '0')는 제외해 개별 보통주만 남긴다. 실패는 빈 리스트.
         """
         top_n = self._settings.live_universe_top_n
         kospi_quota = top_n * 2 // 3
         try:
-            rows = self._naver_market_rows(0, kospi_quota)
-            rows += self._naver_market_rows(1, top_n - kospi_quota)
+            etf = self._naver_etf_codes()
+            rows = self._naver_market_rows(0, kospi_quota, etf)
+            rows += self._naver_market_rows(1, top_n - kospi_quota, etf)
         except (httpx.HTTPError, OSError):
             logger.warning("네이버 유니버스 조회 실패 — themes.yml fallback", exc_info=True)
             return []
@@ -1187,15 +1202,39 @@ class LiveProvider:
                 out.append((code, name))
         return out
 
-    def _naver_market_rows(self, sosok: int, quota: int) -> list[tuple[str, str]]:
-        """네이버 시총순위(``sosok``: KOSPI=0/KOSDAQ=1) 상위 ``quota`` (종목코드, 종목명)."""
-        pages = -(-quota // _NAVER_PAGE_SIZE)  # ceil
+    def _naver_market_rows(
+        self, sosok: int, quota: int, exclude: set[str]
+    ) -> list[tuple[str, str]]:
+        """네이버 시총순위(``sosok``) 상위 ``quota`` (코드, 종목명). 제외분만큼 페이지 보충.
+
+        ETF(``exclude``)·우선주(코드 끝자리 ≠ '0')는 건너뛰고, 제외로 부족분이 생기면 다음
+        페이지를 더 읽어 ``quota`` 를 채운다(빈 페이지를 만나면 중단).
+        """
         out: list[tuple[str, str]] = []
-        for page in range(1, pages + 1):
-            text = self._naver_fetch(_NAVER_MARKET_SUM.format(sosok=sosok, page=page))
-            for code, name in _NAVER_ROW_RE.findall(text):
+        page = 1
+        max_pages = -(-quota // _NAVER_PAGE_SIZE) + 4  # 제외분 보충 여유
+        while len(out) < quota and page <= max_pages:
+            matches = _NAVER_ROW_RE.findall(
+                self._naver_fetch(_NAVER_MARKET_SUM.format(sosok=sosok, page=page))
+            )
+            if not matches:  # 마지막 페이지 너머(빈 결과) → 중단
+                break
+            for code, name in matches:
+                if code in exclude or not code.endswith("0"):  # ETF / 우선주 제외
+                    continue
                 out.append((code, html.unescape(name).strip()))
+            page += 1
         return out[:quota]
+
+    def _naver_etf_codes(self) -> set[str]:
+        """네이버 ETF 목록의 종목코드 set — 유니버스 ETF 제외용. 실패는 빈 set(fail-open)."""
+        try:
+            resp = httpx.get(_NAVER_ETF_LIST, headers={"User-Agent": _NAVER_UA}, timeout=15.0)
+            resp.raise_for_status()
+        except (httpx.HTTPError, OSError):
+            logger.warning("네이버 ETF 목록 조회 실패 — ETF 제외 생략", exc_info=True)
+            return set()
+        return set(re.findall(r'"itemcode":"(\d{6})"', resp.text))
 
     def _naver_fetch(self, url: str) -> str:
         """네이버 페이지 HTML(httpx). 실패는 예외 전파(상위가 흡수). 테스트 seam."""

@@ -520,15 +520,16 @@ def test_live_universe_kr_caches(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_live_fetch_universe_kr_by_market_cap(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``_fetch_universe_kr``: 네이버 시총순위(KOSPI:KOSDAQ≈2:1) → 6자리 코드 + **종목명 확보**.
+    """``_fetch_universe_kr``: 네이버 시총순위 → 보통주 코드+종목명, ETF·우선주 제외 + 버전 캐시.
 
-    네이버 페이지 fetch(``_naver_fetch``)를 mock — KOSPI 우선 합집합/중복 제거, ``class="tltle"``
-    앵커에서 종목명을 ``_kr_names`` 에 채우는지, 그리고 2번째 호출이 디스크 캐시(종목명 포함)로
-    네이버 재요청 없이 처리되는지 검증한다.
+    ``_naver_fetch``/``_naver_etf_codes`` 를 mock — ETF(069500)·우선주(005935)가 빠지고, 종목명이
+    ``_kr_names`` 에 채워지며, 2번째 호출이 버전 디스크 캐시(종목명 포함)로 네이버 재요청 없이
+    처리되는지 검증한다.
     """
     lp = _live()
     settings = lp._settings.model_copy(update={"live_universe_top_n": 6})  # KOSPI 4, KOSDAQ 2
     monkeypatch.setattr(lp, "_settings", settings)
+    monkeypatch.setattr(lp, "_naver_etf_codes", lambda: {"069500"})  # KODEX 200 → 제외
 
     calls = {"n": 0}
 
@@ -537,6 +538,8 @@ def test_live_fetch_universe_kr_by_market_cap(monkeypatch: pytest.MonkeyPatch) -
         if "sosok=0" in url:  # KOSPI 시총 상위(class="tltle" 종목명 앵커)
             return (
                 '<a href="/item/main.naver?code=005930" class="tltle">삼성전자</a>'
+                '<a href="/item/main.naver?code=005935" class="tltle">삼성전자우</a>'  # 우선주→제외
+                '<a href="/item/main.naver?code=069500" class="tltle">KODEX 200</a>'  # ETF→제외
                 '<a href="/item/main.naver?code=000660" class="tltle">SK하이닉스</a>'
                 '<a href="/item/main.naver?code=035420" class="tltle">NAVER</a>'
                 '<a href="/item/main.naver?code=005380" class="tltle">현대차</a>'
@@ -549,20 +552,41 @@ def test_live_fetch_universe_kr_by_market_cap(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(lp, "_naver_fetch", fake_fetch)
 
     uni = lp._fetch_universe_kr()
-    # KOSPI quota 4 + KOSDAQ quota 2, KOSPI 먼저(시총 순서 유지).
+    # ETF(069500)·우선주(005935) 제외, KOSPI 보통주 4 + KOSDAQ 2(시총 순서 유지).
     assert uni == ["005930", "000660", "035420", "005380", "247540", "196170"]
-    assert calls["n"] == 2  # KOSPI 1페이지 + KOSDAQ 1페이지(각 quota ≤ 50)
+    assert "069500" not in uni and "005935" not in uni  # ETF·우선주 배제
+    assert calls["n"] == 2  # KOSPI 1페이지 + KOSDAQ 1페이지
     # 종목명이 코드가 아니라 기업명으로 확보됐는지.
     assert lp._kr_names["005930"] == "삼성전자"
-    assert lp._kr_names["247540"] == "에코프로비엠"
     assert lp.get_name("196170", "KR") == "알테오젠"
 
-    # 디스크 캐시(종목명 포함) — in-memory 캐시를 비워도 네이버 재요청 없이 코드·이름 복원.
+    # 버전 디스크 캐시(종목명 포함) — in-memory 캐시를 비워도 네이버 재요청 없이 코드·이름 복원.
     lp._universe_cache.clear()
     lp._kr_names.clear()
     assert lp._fetch_universe_kr() == uni
     assert calls["n"] == 2  # 디스크 캐시 → 네이버 미호출
     assert lp._kr_names["005930"] == "삼성전자"  # 캐시(dict)에서 표시명 복원
+
+
+def test_live_universe_cache_version_mismatch_refetches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """구버전/구형식 유니버스 캐시는 무효화되어 재수집(자동 무효화)."""
+    from backend.market_data import _CACHE_UNIVERSE, _UNIVERSE_SENTINEL, _market_today
+
+    lp = _live()
+    monkeypatch.setattr(lp, "_settings", lp._settings.model_copy(update={"live_universe_top_n": 1}))
+    # 구형식(코드만 list) 캐시를 심어둔다.
+    lp._daily.put(
+        "KR", _UNIVERSE_SENTINEL, _market_today("KR"), _CACHE_UNIVERSE, json.dumps(["999999"])
+    )
+    monkeypatch.setattr(lp, "_naver_etf_codes", lambda: set())
+    monkeypatch.setattr(
+        lp,
+        "_naver_fetch",
+        lambda url: '<a href="/item/main.naver?code=005930" class="tltle">삼성전자</a>',
+    )
+    uni = lp._fetch_universe_kr()
+    assert uni == ["005930"]  # 구캐시 무시하고 네이버 재수집
+    assert "999999" not in uni
 
 
 def test_live_universe_kr_fallback_to_themes(monkeypatch: pytest.MonkeyPatch) -> None:
