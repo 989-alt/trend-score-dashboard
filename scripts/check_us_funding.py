@@ -10,10 +10,19 @@
 from __future__ import annotations
 
 import json
+import sys
+import time
+from pathlib import Path
 
 import httpx
-from backend.config import get_settings
-from backend.trader.kis_auth import token_from_settings
+
+#: 프로젝트 루트를 import 경로에 추가(run_trader.py 와 동일 — 직접 실행 대비).
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from backend.config import get_settings  # noqa: E402
+from backend.trader.kis_auth import token_from_settings  # noqa: E402
 
 _MOCK = "https://openapivts.koreainvestment.com:29443"
 
@@ -59,27 +68,36 @@ def main() -> None:
         print(bal.text[:500])
 
     # 2) 해외 매수가능금액 — 통합증거금이면 원화로 환산된 매수가능액이 잡힌다.
+    # 트레이더가 같은 모의키로 매분 호출 → "초당 거래건수 초과" 가능 → 딜레이+재시도.
     print("\n=== 2) 해외 매수가능금액 (VTTS3007R, AAPL @ $200) ===")
-    ps = client.get(
-        "/uapi/overseas-stock/v1/trading/inquire-psamount",
-        headers={**base_headers, "tr_id": "VTTS3007R"},
-        params={
-            "CANO": cano,
-            "ACNT_PRDT_CD": prod,
-            "OVRS_EXCG_CD": "NASD",
-            "OVRS_ORD_UNPR": "200",
-            "ITEM_CD": "AAPL",
-        },
-    )
-    print("HTTP", ps.status_code)
-    try:
-        body = ps.json()
-    except ValueError:
-        print(ps.text[:500])
+    params = {
+        "CANO": cano,
+        "ACNT_PRDT_CD": prod,
+        "OVRS_EXCG_CD": "NASD",
+        "OVRS_ORD_UNPR": "200",
+        "ITEM_CD": "AAPL",
+    }
+    for attempt in range(6):
+        time.sleep(1.5)
+        ps = client.get(
+            "/uapi/overseas-stock/v1/trading/inquire-psamount",
+            headers={**base_headers, "tr_id": "VTTS3007R"},
+            params=params,
+        )
+        try:
+            body = ps.json()
+        except ValueError:
+            print("HTTP", ps.status_code, ps.text[:300])
+            return
+        msg = str(body.get("msg1", ""))
+        if "초당" in msg or "거래건수" in msg:
+            print(f"  rate limit, 재시도 {attempt + 1}/6...")
+            continue
+        if str(body.get("rt_cd")) != "0":
+            print("rt_cd", body.get("rt_cd"), "msg", msg)
+        print(json.dumps(body.get("output"), ensure_ascii=False, indent=2))
         return
-    if str(body.get("rt_cd")) != "0":
-        print("rt_cd", body.get("rt_cd"), "msg", body.get("msg1"))
-    print(json.dumps(body.get("output"), ensure_ascii=False, indent=2))
+    print("  rate limit 지속 — 트레이더 잠시 멈추고 재시도 필요")
 
 
 if __name__ == "__main__":
