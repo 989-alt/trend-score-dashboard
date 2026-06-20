@@ -329,7 +329,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """
         trade_store: TradeStore = application.state.trade_store
         positions = trade_store.latest_positions()
-        nav = trade_store.nav_series()
+        # 헤드라인 NAV(현금·총평가)는 자금이 든 KR(KRW) 계좌만 본다 — 미장(USD)은 현재 $0 이라
+        # 통화가 다른 두 NAV 를 합치면 KRW 헤드라인이 0 으로 오염된다. TODO: KR+US 통합 평가는
+        # USD→KRW 환산(FX)이 필요하며 미장에 실자금이 들어오면 그때 합산한다.
+        nav = trade_store.nav_series(market="KR")
         now = datetime.now(tz=_SEOUL)
         latest_nav = nav[-1] if nav else None
         pnls = [p["pnl_amount"] for p in positions if p["pnl_amount"] is not None]
@@ -373,9 +376,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @application.get("/api/trading/nav", response_model=TradingNavResponse)
     async def trading_nav(limit: int = Query(2000, ge=1, le=5000)) -> TradingNavResponse:
-        """NAV(총평가) 시계열(오래된→최신, 읽기전용). 면책 포함."""
+        """NAV(총평가) 시계열(오래된→최신, 읽기전용). 면책 포함.
+
+        헤드라인과 동일하게 자금이 든 KR(KRW) 계좌만 — 미장(USD)은 현재 $0(통화 혼입 방지).
+        """
         trade_store: TradeStore = application.state.trade_store
-        nav = [NavPoint(**n) for n in trade_store.nav_series(limit)]
+        nav = [NavPoint(**n) for n in trade_store.nav_series(limit, market="KR")]
         return TradingNavResponse(nav=nav, disclaimer=DISCLAIMER)
 
     # 정적 SPA — 산출물이 있으면 마운트, 없으면 루트 JSON 안내를 노출(API 전용).

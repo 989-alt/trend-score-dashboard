@@ -5,10 +5,10 @@ from __future__ import annotations
 from decimal import Decimal
 
 from backend.config import Settings
-from backend.schemas import Grade, ScoreEntry, SellReason
+from backend.schemas import Grade, Market, ScoreEntry, SellReason
 from backend.trader.models import Balance, HoldingPosition
 from backend.trader.positions import PositionManager
-from backend.trader.strategy import StrategyEngine
+from backend.trader.strategy import Decisions, StrategyEngine
 
 
 def _entry(
@@ -143,3 +143,120 @@ def test_sell_alert_takes_precedence_over_rank() -> None:
     entries = [_entry("A", "90", sell_alert=True, sell_reason="trailing_stop")]
     decisions = engine.decide(entries, _pm("A"), top_n=5)
     assert decisions.sells == [("A", "청산:트레일링손절")]
+
+
+# ── Gemini 결정 레이어 (P10) ──────────────────────────────────────────────
+
+
+class _FakeDecider:
+    """GeminiDecider 대역 — 고정 Decisions(또는 None) 반환. 호출 인자 캡처."""
+
+    def __init__(self, result: Decisions | None) -> None:
+        self._result = result
+        self.called_with: tuple[object, ...] | None = None
+
+    def decide(
+        self,
+        market: Market,
+        candidates: list[ScoreEntry],
+        positions: list[HoldingPosition],
+        cash: Decimal,
+        top_n: int,
+    ) -> Decisions | None:
+        self.called_with = (market, [c.ticker for c in candidates], cash, top_n)
+        return self._result
+
+
+def _engine_with(decider: _FakeDecider, *, use_llm: bool = True) -> StrategyEngine:
+    settings = Settings(_env_file=None, trader_use_llm=use_llm)  # type: ignore[call-arg]
+    return StrategyEngine(settings, decider=decider)  # type: ignore[arg-type]
+
+
+def test_llm_path_used_when_decider_valid() -> None:
+    """decider 가 유효 Decisions 를 주면 그 매수를 사용(결정론 top_n 무시)."""
+    # 점수상 결정론이면 [A,B,C] 전부 매수지만, LLM 은 B 만 고른다.
+    decider = _FakeDecider(Decisions(buys=["B"], sells=[]))
+    engine = _engine_with(decider)
+    entries = [_entry("A", "90"), _entry("B", "80"), _entry("C", "70")]
+    decisions = engine.decide(entries, _pm(), top_n=3)
+    assert decisions.buys == ["B"]
+    assert decisions.sells == []
+    assert decider.called_with is not None
+    # 적격 후보(점수 내림차순)·cash·top_n 이 전달됨.
+    assert decider.called_with[1] == ["A", "B", "C"]
+    assert decider.called_with[3] == 3
+
+
+def test_llm_buys_filtered_to_eligible_and_unheld() -> None:
+    """LLM 이 부적격/보유/환각 티커를 줘도 적격·미보유만 통과."""
+    decider = _FakeDecider(Decisions(buys=["A", "HELD", "ZZZ"], sells=[]))
+    engine = _engine_with(decider)
+    entries = [_entry("A", "90"), _entry("HELD", "80")]
+    decisions = engine.decide(entries, _pm("HELD"), top_n=5)
+    # A=적격·미보유 통과 / HELD=보유라 매수 제외 / ZZZ=후보 아님 드롭.
+    assert decisions.buys == ["A"]
+
+
+def test_llm_discretionary_sell_applied() -> None:
+    """LLM 재량 매도(보유 종목)는 적용된다."""
+    decider = _FakeDecider(Decisions(buys=[], sells=[("HELD", "청산:LLM판단")]))
+    engine = _engine_with(decider)
+    entries = [_entry("A", "90"), _entry("HELD", "80")]
+    decisions = engine.decide(entries, _pm("HELD"), top_n=5)
+    assert ("HELD", "청산:LLM판단") in decisions.sells
+
+
+def test_forced_stop_loss_sell_always_present_with_llm() -> None:
+    """손절(sell_alert)은 LLM 이 매도에 안 넣어도 항상 강제 매도된다."""
+    # LLM 은 매수만 주고 매도는 비움 → 그래도 손절 H 는 매도.
+    decider = _FakeDecider(Decisions(buys=["A"], sells=[]))
+    engine = _engine_with(decider)
+    entries = [
+        _entry("A", "90"),
+        _entry("H", "85", sell_alert=True, sell_reason="trailing_stop"),
+    ]
+    decisions = engine.decide(entries, _pm("H"), top_n=5)
+    assert ("H", "청산:트레일링손절") in decisions.sells
+    assert decisions.buys == ["A"]
+
+
+def test_forced_snapshot_exit_sell_always_present_with_llm() -> None:
+    """스냅샷이탈(보유인데 스냅샷에 없음)도 LLM 무관하게 강제 매도."""
+    decider = _FakeDecider(Decisions(buys=["A"], sells=[]))
+    engine = _engine_with(decider)
+    entries = [_entry("A", "90")]
+    decisions = engine.decide(entries, _pm("GONE"), top_n=5)
+    assert ("GONE", "청산:스냅샷이탈") in decisions.sells
+
+
+def test_fallback_to_deterministic_when_decider_returns_none() -> None:
+    """decider 가 None(실패) → 결정론 점수상위 top_n 으로 폴백(매매 연속성)."""
+    decider = _FakeDecider(None)
+    engine = _engine_with(decider)
+    entries = [_entry("A", "90"), _entry("B", "80"), _entry("C", "70")]
+    decisions = engine.decide(entries, _pm(), top_n=2)
+    # 폴백 = 결정론 top_n=2 → [A, B].
+    assert decisions.buys == ["A", "B"]
+
+
+def test_fallback_keeps_forced_sells() -> None:
+    """폴백 경로에서도 손절은 항상 매도(폴백+강제 매도 병합)."""
+    decider = _FakeDecider(None)
+    engine = _engine_with(decider)
+    entries = [
+        _entry("A", "90"),
+        _entry("H", "85", sell_alert=True, sell_reason="trailing_stop"),
+    ]
+    decisions = engine.decide(entries, _pm("H"), top_n=5)
+    assert ("H", "청산:트레일링손절") in decisions.sells
+
+
+def test_use_llm_false_ignores_decider() -> None:
+    """trader_use_llm=False 면 decider 가 있어도 결정론 사용."""
+    decider = _FakeDecider(Decisions(buys=["C"], sells=[]))  # LLM 이면 C 만
+    engine = _engine_with(decider, use_llm=False)
+    entries = [_entry("A", "90"), _entry("B", "80"), _entry("C", "70")]
+    decisions = engine.decide(entries, _pm(), top_n=3)
+    # 결정론 → 전부 매수(LLM 무시).
+    assert decisions.buys == ["A", "B", "C"]
+    assert decider.called_with is None  # decider 미호출

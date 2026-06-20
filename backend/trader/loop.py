@@ -83,6 +83,7 @@ class TraderLoop:
         def _record_nav() -> None:
             self._ts.record_snapshot(
                 now,
+                market=self._market,
                 total_eval=self._pm.total_eval,
                 cash=self._pm.cash,
                 positions=[p.model_dump() for p in balance.positions],

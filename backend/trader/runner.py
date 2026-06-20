@@ -24,6 +24,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from backend.config import Settings, get_settings
 from backend.schemas import Market
 from backend.store import Store
+from backend.trader.gemini_decider import GeminiDecider
 from backend.trader.kis_auth import KisToken, token_from_settings
 from backend.trader.kis_order import KisOrderClient
 from backend.trader.kis_overseas import KisOverseasOrderClient
@@ -41,13 +42,28 @@ _SEOUL = ZoneInfo("Asia/Seoul")
 _MOCK_DOMAIN = "https://openapivts.koreainvestment.com:29443"
 
 
-def build_loop(settings: Settings, market: Market, *, token: KisToken | None = None) -> TraderLoop:
+def _build_decider(settings: Settings) -> GeminiDecider | None:
+    """``trader_use_llm`` 이면 Gemini 결정기 1개 생성(네트워크 0 — 클라이언트는 지연 생성).
+
+    KR·US 가 한 인스턴스를 공유한다(캐시는 시장별로 분리). 키 없으면 첫 호출 시 실패→폴백.
+    """
+    return GeminiDecider(settings) if settings.trader_use_llm else None
+
+
+def build_loop(
+    settings: Settings,
+    market: Market,
+    *,
+    token: KisToken | None = None,
+    decider: GeminiDecider | None = None,
+) -> TraderLoop:
     """``market`` 매매 루프 1개를 의존성 주입해 조립(네트워크 0 — 객체 생성만).
 
     - 주문: 국장=``KisOrderClient``(시장가) / 미장=``KisOverseasOrderClient``(지정가). 둘 다
       모의 도메인. ``token`` 주입 시 그 ``KisToken`` 을 공유(국장·미장 토큰 thrash 방지).
     - 스냅샷 읽기: ``Store`` (대시보드가 쓰는 ``db_path`` 동일 파일 — 봇은 읽기만).
     - 매매 기록: ``TradeStore`` (``trader_db_path``, 봇이 쓰고 API 가 읽음).
+    - 매수 결정: ``decider`` 주입 + ``trader_use_llm`` 면 Gemini, 아니면 결정론(StrategyEngine).
     """
     tok = token or token_from_settings(settings, _MOCK_DOMAIN)
     order_client: OrderClient
@@ -57,7 +73,8 @@ def build_loop(settings: Settings, market: Market, *, token: KisToken | None = N
         order_client = KisOrderClient(settings, mode="mock", token=tok)
     store = Store(settings.db_path)
     trade_store = TradeStore(settings.trader_db_path)
-    engine = StrategyEngine(settings)
+    dec = decider if decider is not None else _build_decider(settings)
+    engine = StrategyEngine(settings, decider=dec)
     pm = PositionManager()
     return TraderLoop(
         settings,
@@ -92,9 +109,10 @@ def run(settings: Settings | None = None, *, markets: tuple[Market, ...] = ("KR"
     """
     settings = settings or get_settings()
     token = token_from_settings(settings, _MOCK_DOMAIN)
+    decider = _build_decider(settings)  # KR·US 공유(시장별 캐시 분리). 키 없으면 폴백.
     scheduler = BlockingScheduler(timezone=_SEOUL)
     for market in markets:
-        loop = build_loop(settings, market, token=token)
+        loop = build_loop(settings, market, token=token, decider=decider)
         scheduler.add_job(
             _make_job(loop, market),
             IntervalTrigger(seconds=settings.trader_loop_sec, timezone=_SEOUL),
