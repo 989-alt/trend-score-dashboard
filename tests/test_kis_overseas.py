@@ -111,10 +111,24 @@ def test_place_order_ignores_market_flag(monkeypatch: pytest.MonkeyPatch) -> Non
     assert cap["body"]["ORD_DVSN"] == "00"
 
 
+def _route_get(*, balance: dict[str, Any], psamount: dict[str, Any]) -> Any:
+    """경로별 GET 라우터 — 잔고 GET 과 매수가능금액(psamount) GET 을 분기해 응답한다.
+
+    get_balance() 는 이제 ①잔고 ②매수가능금액(통합증거금 buying power) 두 GET 을 호출한다.
+    """
+
+    def _get(path: str, headers: Any = None, params: Any = None) -> httpx.Response:
+        if "inquire-psamount" in path:
+            return _resp(psamount)
+        return _resp(balance)
+
+    return _get
+
+
 def test_get_balance_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """잔고 — output1 보유(수량>0)·output2 USD 현금. 총평가=현금+Σ(수량×현재가)."""
+    """잔고 — output1 보유(수량>0)·cash=통합증거금 매수가능금액. 총평가=현금+Σ(수량×현재가)."""
     c = _client()
-    payload = {
+    balance = {
         "rt_cd": "0",
         "output1": [
             {
@@ -129,35 +143,124 @@ def test_get_balance_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
             },
             {"ovrs_pdno": "TSLA", "ovrs_cblc_qty": "0", "pchs_avg_pric": "0"},
         ],
+        # 외화예수금 USD 는 $0(원화만 보유) — cash 는 이 값이 아니라 매수가능금액을 써야 한다.
         "output2": [
             {"crcy_cd": "KRW", "frcr_dncl_amt_2": "0"},
-            {"crcy_cd": "USD", "frcr_dncl_amt_2": "5000.00"},
+            {"crcy_cd": "USD", "frcr_dncl_amt_2": "0"},
         ],
     }
-    monkeypatch.setattr(c._client, "get", lambda path, headers=None, params=None: _resp(payload))
+    psamount = {"rt_cd": "0", "output": {"ord_psbl_frcr_amt": "100000.00"}}
+    monkeypatch.setattr(c._client, "get", _route_get(balance=balance, psamount=psamount))
     bal = c.get_balance()
-    assert bal.cash == Decimal("5000.00")
-    # 총평가 = 5000 + 10*190 = 6900.
-    assert bal.total_eval == Decimal("6900.00")
+    # cash = 통합증거금 매수가능금액(100000), 외화예수금 $0 이 아님.
+    assert bal.cash == Decimal("100000.00")
+    # 총평가 = 100000 + 10*190 = 101900.
+    assert bal.total_eval == Decimal("101900.00")
     assert len(bal.positions) == 1  # 수량 0 종목 제외
     pos = bal.positions[0]
     assert pos.ticker == "AAPL" and pos.qty == 10
     assert pos.avg_price == Decimal("150.00") and pos.cur_price == Decimal("190.00")
 
 
-def test_get_balance_output2_dict(monkeypatch: pytest.MonkeyPatch) -> None:
-    """output2 가 list 가 아니라 dict(단일 통화)인 경우도 USD 현금을 파싱."""
+def test_buying_power_parses_ord_psbl_frcr_amt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """매수가능금액 — output.ord_psbl_frcr_amt → Decimal(통합증거금 buying power)."""
     c = _client()
-    payload = {
+    cap: dict[str, Any] = {}
+
+    def fake_get(path: str, headers: Any = None, params: Any = None) -> httpx.Response:
+        cap["path"], cap["params"], cap["headers"] = path, params, headers
+        return _resp(
+            {
+                "rt_cd": "0",
+                "output": {
+                    "ord_psbl_frcr_amt": "100000.00",
+                    "ovrs_ord_psbl_amt": "100000.00",
+                    "max_ord_psbl_qty": "495",
+                },
+            }
+        )
+
+    monkeypatch.setattr(c._client, "get", fake_get)
+    assert c.buying_power() == Decimal("100000.00")
+    assert "inquire-psamount" in cap["path"]
+    # 계좌단위 금액이라 기준종목·단가로 호출.
+    assert cap["params"]["ITEM_CD"] == "AAPL" and cap["params"]["OVRS_ORD_UNPR"] == "100"
+    assert cap["params"]["OVRS_EXCG_CD"] == "NASD"
+    assert cap["headers"]["tr_id"] == "VTTS3007R"
+
+
+def test_buying_power_falls_back_to_ovrs_ord_psbl_amt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ord_psbl_frcr_amt 누락/0 이면 ovrs_ord_psbl_amt 로 폴백."""
+    c = _client()
+    monkeypatch.setattr(
+        c._client,
+        "get",
+        lambda path, headers=None, params=None: _resp(
+            {"rt_cd": "0", "output": {"ovrs_ord_psbl_amt": "777.00"}}
+        ),
+    )
+    assert c.buying_power() == Decimal("777.00")
+
+
+def test_buying_power_retries_on_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """초당 거래건수 초과(HTTP 500) → time.sleep 후 재시도해 금액 반환(raise 안 함)."""
+    c = _client()
+    monkeypatch.setattr("backend.trader.kis_overseas.time.sleep", lambda _s: None)
+    rate_limited = httpx.Response(
+        500,
+        text='{"rt_cd":"1","msg_cd":"EGW00201","msg1":"초당 거래건수를 초과하였습니다."}',
+        request=httpx.Request("GET", "http://test"),
+    )
+    ok = _resp({"rt_cd": "0", "output": {"ord_psbl_frcr_amt": "100000.00"}})
+    calls = {"n": 0}
+
+    def fake_get(path: str, headers: Any = None, params: Any = None) -> httpx.Response:
+        calls["n"] += 1
+        return rate_limited if calls["n"] == 1 else ok
+
+    monkeypatch.setattr(c._client, "get", fake_get)
+    assert c.buying_power() == Decimal("100000.00")  # raise 하지 않고 재시도 성공
+    assert calls["n"] == 2
+
+
+def test_buying_power_persistent_failure_returns_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    """매수가능금액 조회가 계속 실패해도 raise 없이 Decimal('0') (페일세이프)."""
+    c = _client()
+    monkeypatch.setattr("backend.trader.kis_overseas.time.sleep", lambda _s: None)
+    rate_limited = httpx.Response(
+        500,
+        text='{"rt_cd":"1","msg_cd":"EGW00201","msg1":"초당 거래건수를 초과하였습니다."}',
+        request=httpx.Request("GET", "http://test"),
+    )
+    monkeypatch.setattr(c._client, "get", lambda path, headers=None, params=None: rate_limited)
+    assert c.buying_power() == Decimal("0")
+
+
+def test_get_balance_psamount_failure_cash_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    """매수가능금액 실패 시 cash=0(US skip)·총평가=보유평가만 — 크래시 없음(페일세이프)."""
+    c = _client()
+    balance = {
         "rt_cd": "0",
-        "output1": [],
-        "output2": {"crcy_cd": "USD", "frcr_dncl_amt1": "1234.50"},
+        "output1": [
+            {"ovrs_pdno": "AAPL", "ovrs_cblc_qty": "10", "now_pric2": "190.00"},
+        ],
+        "output2": [{"crcy_cd": "USD", "frcr_dncl_amt_2": "0"}],
     }
-    monkeypatch.setattr(c._client, "get", lambda path, headers=None, params=None: _resp(payload))
+    # psamount 는 비-2xx(서버 오류) — buying_power 가 0 으로 페일세이프.
+    psamount_err = httpx.Response(
+        500,
+        text='{"rt_cd":"1","msg_cd":"40310000","msg1":"일시 오류"}',
+        request=httpx.Request("GET", "http://test"),
+    )
+
+    def fake_get(path: str, headers: Any = None, params: Any = None) -> httpx.Response:
+        return psamount_err if "inquire-psamount" in path else _resp(balance)
+
+    monkeypatch.setattr(c._client, "get", fake_get)
     bal = c.get_balance()
-    assert bal.cash == Decimal("1234.50")
-    assert bal.total_eval == Decimal("1234.50")
-    assert bal.positions == []
+    assert bal.cash == Decimal("0")  # US 이번 사이클 skip
+    assert bal.total_eval == Decimal("1900.00")  # 보유평가 10*190 만
+    assert len(bal.positions) == 1
 
 
 def test_inquire_orders_unfilled(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -231,16 +334,18 @@ def test_get_self_heals_on_token_expired(monkeypatch: pytest.MonkeyPatch) -> Non
     expired = httpx.Response(
         500, text='{"msg_cd":"EGW00123"}', request=httpx.Request("GET", "http://test")
     )
-    ok = _resp(
-        {"rt_cd": "0", "output1": [], "output2": {"crcy_cd": "USD", "frcr_dncl_amt_2": "100"}}
-    )
-    calls = {"n": 0}
+    balance_ok = _resp({"rt_cd": "0", "output1": [], "output2": []})
+    psamount_ok = _resp({"rt_cd": "0", "output": {"ord_psbl_frcr_amt": "100"}})
+    # 잔고 GET 1회차는 토큰만료 → 재발급 후 2회차 성공. 이후 매수가능금액 GET 은 정상.
+    balance_calls = {"n": 0}
 
     def fake_get(path: str, headers: Any = None, params: Any = None) -> httpx.Response:
-        calls["n"] += 1
-        return expired if calls["n"] == 1 else ok
+        if "inquire-psamount" in path:
+            return psamount_ok
+        balance_calls["n"] += 1
+        return expired if balance_calls["n"] == 1 else balance_ok
 
     monkeypatch.setattr(c._client, "get", fake_get)
     bal = c.get_balance()
-    assert calls["n"] == 2 and refreshed["n"] == 1
+    assert balance_calls["n"] == 2 and refreshed["n"] == 1
     assert bal.cash == Decimal("100")

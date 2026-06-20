@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -48,11 +49,19 @@ _TR_SELL = "VTTT1001U"  # 해외 매도(모의). 실전 TTTT1006U.
 _TR_BALANCE = "VTRP6504R"  # 해외 잔고(모의). 실전 TTTS3012R.
 _TR_NCCS = "VTTS3018R"  # 해외 미체결(모의). 라이브 가동 전 확인.
 _TR_CANCEL = "VTTT1004U"  # 해외 정정취소(모의). 라이브 가동 전 확인.
+_TR_PSAMT = "VTTS3007R"  # 해외 매수가능금액(모의) — 통합증거금 반영 buying power.
 
 _ORDER_PATH = "/uapi/overseas-stock/v1/trading/order"
 _CANCEL_PATH = "/uapi/overseas-stock/v1/trading/order-rvsecncl"
 _BALANCE_PATH = "/uapi/overseas-stock/v1/trading/inquire-balance"
 _NCCS_PATH = "/uapi/overseas-stock/v1/trading/inquire-nccs"
+_PSAMT_PATH = "/uapi/overseas-stock/v1/trading/inquire-psamount"
+
+#: 매수가능금액 조회는 **계좌단위 주문가능액**(ord_psbl_frcr_amt)이 종목·단가와 무관하게 동일
+#: (max_ord_psbl_qty = amount/price 로만 달라짐). 그래서 임의 기준종목·단가로 호출해 계좌 전체
+#: USD 주문가능액을 얻는다.
+_PSAMT_REF_TICKER = "AAPL"
+_PSAMT_REF_PRICE = "100"
 
 _RETRY = retry(
     retry=retry_if_exception_type(httpx.HTTPError),
@@ -242,6 +251,39 @@ class KisOverseasOrderClient:
             message=str(data.get("msg1", "")),
         )
 
+    # ── 매수가능금액 (통합증거금 buying power) ─────────────────────────
+    def buying_power(self) -> Decimal:
+        """해외 매수가능금액(통합증거금 반영 USD 주문가능액) → Decimal.
+
+        모의계좌는 외화예수금(USD)이 $0(원화만 보유)이라 그것으로 매수예산을 잡으면 미장이
+        영영 안 산다. 통합증거금 매수가능금액 API(``inquire-psamount``)는 원화를 끌어다 쓰는
+        실제 주문가능 USD 를 돌려준다. 계좌단위 금액이라 기준종목·단가로 1회 호출해 받는다.
+
+        같은 모의 앱키를 매분 트레이더 루프와 공유하므로 KIS 가 "초당 거래건수 초과"(HTTP 500,
+        ``rt_cd=1``)를 줄 수 있다 → 최대 3회 ``time.sleep(0.8)`` 후 재시도. **그 외 어떤 실패든
+        절대 raise 하지 않고 ``Decimal("0")`` 반환**(페일세이프 — 그 사이클 US 만 skip = 현상유지).
+        """
+        params = {
+            "CANO": self._cano,
+            "ACNT_PRDT_CD": self._prod,
+            "OVRS_EXCG_CD": _EXCG,
+            "OVRS_ORD_UNPR": _PSAMT_REF_PRICE,
+            "ITEM_CD": _PSAMT_REF_TICKER,
+        }
+        for attempt in range(3):
+            try:
+                data = self._get(_PSAMT_PATH, tr_id=_TR_PSAMT, params=params)
+            except KisOrderError as exc:
+                msg = str(exc)
+                if ("초당" in msg or "거래건수" in msg) and attempt < 2:
+                    time.sleep(0.8)
+                    continue
+                logger.warning("해외 매수가능금액 조회 실패 — US 이번 사이클 skip: %s", msg)
+                return Decimal("0")
+            out = data.get("output") or {}
+            return _dec(out.get("ord_psbl_frcr_amt")) or _dec(out.get("ovrs_ord_psbl_amt"))
+        return Decimal("0")
+
     # ── 잔고 ───────────────────────────────────────────────────────────
     def get_balance(self) -> Balance:
         """해외 잔고 — USD 주문가능현금 + 총평가(현금+평가) + 보유 종목(수량>0)."""
@@ -278,23 +320,9 @@ class KisOverseasOrderClient:
                 )
             )
             holdings_eval += qty * cur
-        cash = self._parse_cash(data.get("output2"))
+        # 매수예산은 외화예수금($0)이 아니라 통합증거금 매수가능금액을 쓴다(원화 끌어다 주문).
+        cash = self.buying_power()
         return Balance(cash=cash, total_eval=cash + holdings_eval, positions=positions)
-
-    @staticmethod
-    def _parse_cash(output2: Any) -> Decimal:
-        """output2(통화별 예수금) → USD 현금. dict(단일) 또는 list 둘 다 처리."""
-        rows: list[dict[str, Any]]
-        if isinstance(output2, dict):
-            rows = [output2]
-        elif isinstance(output2, list):
-            rows = [r for r in output2 if isinstance(r, dict)]
-        else:
-            return Decimal("0")
-        for r in rows:
-            if str(r.get("crcy_cd", "")).upper() == "USD":
-                return _dec(r.get("frcr_dncl_amt_2")) or _dec(r.get("frcr_dncl_amt1"))
-        return Decimal("0")
 
     # ── 미체결 조회 (멱등 가드용) ──────────────────────────────────────
     def inquire_orders(self, query_date: str) -> list[OrderStatus]:
