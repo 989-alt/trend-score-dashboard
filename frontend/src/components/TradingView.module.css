@@ -260,10 +260,16 @@
   background: var(--down-bg);
 }
 
-.orderTicker {
+.orderName {
   flex-shrink: 0;
   font-weight: 600;
   color: var(--text);
+}
+
+.orderTicker {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-muted);
 }
 
 .orderQty {

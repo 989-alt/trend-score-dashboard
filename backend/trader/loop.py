@@ -121,9 +121,11 @@ class TraderLoop:
             if ticker in pending:
                 logger.info("미체결 잔존 — 매도 재주문 스킵 (ticker=%s)", ticker)
                 continue
-            order = self._place_sell(ticker, qty, by_ticker.get(ticker))
+            entry = by_ticker.get(ticker)
+            order = self._place_sell(ticker, qty, entry)
             if order is not None:
-                self._ts.record_order(order, reason=reason)
+                name = entry.name if entry is not None else self._pm.name(ticker)
+                self._ts.record_order(order, reason=reason, name=name)
 
         # 매수 — 종목당 목표금액(가용평가액 ÷ top_n). 킬스위치/미체결 시 스킵.
         if halted:
@@ -144,7 +146,7 @@ class TraderLoop:
                     continue
                 order = self._place_buy(ticker, qty, entry.price)
                 if order is not None:
-                    self._ts.record_order(order, reason="진입:점수상위")
+                    self._ts.record_order(order, reason="진입:점수상위", name=entry.name)
 
         _record_nav()
         self._reconcile_fills(now)  # 직전 사이클들의 접수 → 실제 체결 반영(멱등)

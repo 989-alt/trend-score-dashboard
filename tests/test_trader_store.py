@@ -13,8 +13,13 @@ from backend.trader.store import TradeStore
 
 def _sell(order_no: str, ticker: str, ts: datetime) -> OrderResult:
     return OrderResult(
-        order_no=order_no, org_no="6", ticker=ticker, side="sell", qty=10,
-        submitted_at=ts, message="모의투자 매도주문이 완료 되었습니다.",
+        order_no=order_no,
+        org_no="6",
+        ticker=ticker,
+        side="sell",
+        qty=10,
+        submitted_at=ts,
+        message="모의투자 매도주문이 완료 되었습니다.",
     )
 
 
@@ -58,6 +63,41 @@ def test_trade_store_roundtrip(tmp_path: Path) -> None:
 
     nav = store.nav_series()
     assert len(nav) == 1 and nav[0]["total_eval"] == Decimal("500000000")
+
+
+def test_latest_positions_empty_after_account_goes_flat(tmp_path: Path) -> None:
+    """매도로 계좌가 비면(이후 빈 스냅샷) latest_positions 는 []. (유령 포지션 버그 회귀)."""
+    store = TradeStore(tmp_path / "t.db")
+    # 09:02 보유 1종목.
+    store.record_snapshot(
+        datetime(2026, 6, 22, 9, 2, tzinfo=UTC),
+        total_eval=Decimal("502760000"),
+        cash=Decimal("500000000"),
+        positions=[
+            HoldingPosition(
+                ticker="000660", name="SK하이닉스", qty=1, avg_price=Decimal("2735000")
+            ).model_dump()
+        ],
+    )
+    # 09:03 전량 매도 → 보유 0(빈 스냅샷: nav 행만, position_snap 행 없음).
+    store.record_snapshot(
+        datetime(2026, 6, 22, 9, 3, tzinfo=UTC),
+        total_eval=Decimal("502749000"),
+        cash=Decimal("502749000"),
+        positions=[],
+    )
+    # 최신 사이클(09:03)이 flat 이므로 빈 리스트여야 한다(09:02 스냅샷 고정 금지).
+    assert store.latest_positions() == []
+
+
+def test_record_order_stores_and_returns_name(tmp_path: Path) -> None:
+    """주문 기록에 종목명 저장 → recent_orders 가 name 반환(없으면 코드 표시 폴백용)."""
+    store = TradeStore(tmp_path / "t.db")
+    store.record_order(
+        _sell("1", "000660", datetime(2026, 6, 22, 9, 2, tzinfo=UTC)), name="SK하이닉스"
+    )
+    o = store.recent_orders()[0]
+    assert o["ticker"] == "000660" and o["name"] == "SK하이닉스"
 
 
 def test_trade_store_latest_only_newest_snapshot(tmp_path: Path) -> None:
@@ -183,13 +223,24 @@ def test_reconcile_fills_sets_fill_and_realized(tmp_path: Path) -> None:
         datetime(2026, 6, 22, 9, 0, tzinfo=UTC),
         total_eval=Decimal("1"),
         cash=Decimal("1"),
-        positions=[HoldingPosition(ticker="005930", qty=10, avg_price=Decimal("70000")).model_dump()],
+        positions=[
+            HoldingPosition(ticker="005930", qty=10, avg_price=Decimal("70000")).model_dump()
+        ],
     )
     store.record_order(_sell("1", "005930", datetime(2026, 6, 22, 9, 5, tzinfo=UTC)))
     # 75,000 에 10주 전량 체결 → (75000-70000)*10 = 50,000 실현.
     store.reconcile_fills(
-        [OrderStatus(order_no="1", ticker="005930", side="sell", order_qty=10,
-                     filled_qty=10, filled_price=Decimal("75000"), status="체결")]
+        [
+            OrderStatus(
+                order_no="1",
+                ticker="005930",
+                side="sell",
+                order_qty=10,
+                filled_qty=10,
+                filled_price=Decimal("75000"),
+                status="체결",
+            )
+        ]
     )
     o = store.recent_orders()[0]
     assert o["filled_qty"] == 10 and o["status"] == "체결"
@@ -201,12 +252,22 @@ def test_reconcile_fills_is_idempotent(tmp_path: Path) -> None:
     store = TradeStore(tmp_path / "t.db")
     store.record_snapshot(
         datetime(2026, 6, 22, 9, 0, tzinfo=UTC),
-        total_eval=Decimal("1"), cash=Decimal("1"),
-        positions=[HoldingPosition(ticker="005930", qty=10, avg_price=Decimal("70000")).model_dump()],
+        total_eval=Decimal("1"),
+        cash=Decimal("1"),
+        positions=[
+            HoldingPosition(ticker="005930", qty=10, avg_price=Decimal("70000")).model_dump()
+        ],
     )
     store.record_order(_sell("1", "005930", datetime(2026, 6, 22, 9, 5, tzinfo=UTC)))
-    fill = OrderStatus(order_no="1", ticker="005930", side="sell", order_qty=10,
-                       filled_qty=10, filled_price=Decimal("75000"), status="체결")
+    fill = OrderStatus(
+        order_no="1",
+        ticker="005930",
+        side="sell",
+        order_qty=10,
+        filled_qty=10,
+        filled_price=Decimal("75000"),
+        status="체결",
+    )
     store.reconcile_fills([fill])
     store.reconcile_fills([fill])  # 재호출
     assert store.realized_pnl_total() == Decimal("50000")  # 100,000 아님
@@ -217,13 +278,25 @@ def test_reconcile_unfilled_sell_stays_unrealized(tmp_path: Path) -> None:
     store = TradeStore(tmp_path / "t.db")
     store.record_snapshot(
         datetime(2026, 6, 22, 9, 0, tzinfo=UTC),
-        total_eval=Decimal("1"), cash=Decimal("1"),
-        positions=[HoldingPosition(ticker="000660", qty=1, avg_price=Decimal("2735000")).model_dump()],
+        total_eval=Decimal("1"),
+        cash=Decimal("1"),
+        positions=[
+            HoldingPosition(ticker="000660", qty=1, avg_price=Decimal("2735000")).model_dump()
+        ],
     )
     store.record_order(_sell("9", "000660", datetime(2026, 6, 22, 9, 2, tzinfo=UTC)))
     store.reconcile_fills(
-        [OrderStatus(order_no="9", ticker="000660", side="sell", order_qty=1,
-                     filled_qty=0, filled_price=None, status="")]
+        [
+            OrderStatus(
+                order_no="9",
+                ticker="000660",
+                side="sell",
+                order_qty=1,
+                filled_qty=0,
+                filled_price=None,
+                status="",
+            )
+        ]
     )
     o = store.recent_orders()[0]
     assert o["filled_qty"] == 0 and o["status"] == "미체결"

@@ -44,6 +44,11 @@ class PositionManager:
         pos = self._pos.get(ticker)
         return pos.qty if pos else 0
 
+    def name(self, ticker: str) -> str:
+        """보유 종목명(잔고 기준). 미보유면 빈 문자열 — 주문 기록 표시용 폴백."""
+        pos = self._pos.get(ticker)
+        return pos.name if pos else ""
+
     def position(self, ticker: str) -> HoldingPosition | None:
         return self._pos.get(ticker)
 

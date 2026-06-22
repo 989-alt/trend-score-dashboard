@@ -47,6 +47,7 @@ const ORDERS: TradingOrder[] = [
   {
     ts: "2026-06-18T09:05:00+09:00",
     ticker: "005930",
+    name: "SamsungElec",
     side: "buy",
     qty: 10,
     filledQty: 10,
@@ -57,6 +58,7 @@ const ORDERS: TradingOrder[] = [
   {
     ts: "2026-06-18T14:20:00+09:00",
     ticker: "000660",
+    name: "SkHynix",
     side: "sell",
     qty: 5,
     filledQty: 0,
@@ -91,8 +93,9 @@ describe("TradingView", () => {
     render(
       <TradingView status={STATUS} positions={POSITIONS} orders={ORDERS} nav={NAV} />,
     );
-    expect(screen.getByText("SamsungElec")).toBeInTheDocument();
-    expect(screen.getByText("SkHynix")).toBeInTheDocument();
+    // Names also appear in the order timeline now → tolerate duplicates.
+    expect(screen.getAllByText("SamsungElec").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("SkHynix").length).toBeGreaterThan(0);
     // Winner shows a +% , loser shows a -% .
     expect(screen.getByText(/\+7\.14%/)).toBeInTheDocument();
     expect(screen.getByText(/-8\.33%/)).toBeInTheDocument();
