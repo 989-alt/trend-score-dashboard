@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import backtest_10y as bt
 from backend.regime import classify_regime
 from backend.schemas import OHLCVRow
+from backend.sleeves.inverse import InverseParams, simulate_inverse
 from backend.sleeves.mean_reversion import MeanRevParams, Trade, simulate, summarize
 
 _MIN_BARS = 210  # MA200 워밍업 + 여유
@@ -75,11 +76,17 @@ def run_market(market: str, uni: dict[str, str], years: int, session: object | N
         gated.extend(simulate(rows, params, allowed_dates=chop))
         ungated.extend(simulate(rows, params))
 
-    for label, trades in (("레짐게이트(CHOP만)", gated), ("무게이트(전구간)", ungated)):
+    inv = simulate_inverse(index_rows, InverseParams(cost_bps=_COST_BPS[market]))
+    for label, trades in (
+        ("평균회귀 레짐게이트(CHOP만)", gated),
+        ("평균회귀 무게이트(전구간)", ungated),
+        ("인버스(DOWN 레짐, 지수 1X)", inv),
+    ):
         s = summarize(trades)
         print(f"\n[{label}] 거래수 {s['n']}")
         if s["n"]:
             print(f"  승률 {_pct(s['win_rate'])}  |  기대값/거래 {_pct(s['avg_ret'])}")
+            print(f"  풀링 총복리 {_pct(s['total_return'])}")
             print(f"  청산사유 {dict(Counter(t.reason for t in trades))}")
             edge = s["win_rate"] > Decimal("0.5") and s["avg_ret"] > Decimal("0")
             print(f"  게이트(양의 기대값): {'PASS' if edge else 'FAIL'}")
