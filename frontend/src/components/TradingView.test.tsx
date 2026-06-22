@@ -14,6 +14,7 @@ const STATUS: TradingStatus = {
   totalEval: 10_500_000,
   cash: 4_500_000,
   totalPnl: 500_000,
+  realizedPnl: 120_000,
   positionCount: 2,
   asOf: "2026-06-18T05:30:00+09:00",
   disclaimer: "d",
@@ -48,6 +49,8 @@ const ORDERS: TradingOrder[] = [
     ticker: "005930",
     side: "buy",
     qty: 10,
+    filledQty: 10,
+    status: "체결",
     reason: "breakout",
     message: "ok",
   },
@@ -56,6 +59,8 @@ const ORDERS: TradingOrder[] = [
     ticker: "000660",
     side: "sell",
     qty: 5,
+    filledQty: 0,
+    status: "접수",
     reason: "trailing_stop",
     message: "ok",
   },
@@ -100,6 +105,17 @@ describe("TradingView", () => {
     expect(screen.getByText(translate("trading.side.buy"))).toBeInTheDocument();
     expect(screen.getByText(translate("trading.side.sell"))).toBeInTheDocument();
     expect(screen.getByText("trailing_stop")).toBeInTheDocument();
+    // Fill status chips: filled buy + unfilled sell (the still-held contradiction).
+    expect(screen.getByText(translate("trading.fill.filled"))).toBeInTheDocument();
+    expect(screen.getByText(translate("trading.fill.none"))).toBeInTheDocument();
+  });
+
+  it("shows realized pnl distinct from unrealized total", () => {
+    render(
+      <TradingView status={STATUS} positions={POSITIONS} orders={ORDERS} nav={NAV} />,
+    );
+    expect(screen.getByText(translate("trading.realizedPnl"))).toBeInTheDocument();
+    expect(screen.getByText(`+120,000${translate("unit.won")}`)).toBeInTheDocument();
   });
 
   it("computes the cumulative NAV return from the first point", () => {

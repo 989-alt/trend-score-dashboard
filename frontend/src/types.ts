@@ -311,6 +311,7 @@ export interface RawTradingStatus {
   cash?: Num;
   position_count?: number;
   total_pnl?: Num;
+  realized_pnl?: Num;
   as_of?: string | null;
   disclaimer: string;
 }
@@ -336,6 +337,8 @@ export interface RawTradingOrder {
   ticker: string;
   side: string;
   qty: number;
+  filled_qty?: number;
+  status?: string;
   reason: string;
   message: string;
 }
@@ -363,6 +366,7 @@ export interface TradingStatus {
   cash: number | null;
   positionCount: number;
   totalPnl: number | null;
+  realizedPnl: number | null;
   asOf: string | null;
   disclaimer: string;
 }
@@ -383,6 +387,8 @@ export interface TradingOrder {
   ticker: string;
   side: string;
   qty: number;
+  filledQty: number;
+  status: string;
   reason: string;
   message: string;
 }

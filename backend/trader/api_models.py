@@ -31,7 +31,11 @@ class TradingPosition(BaseModel):
 
 
 class TradingOrder(BaseModel):
-    """주문 접수 기록 1건(체결이 아니라 '접수')."""
+    """주문 기록 1건. ``qty``=접수 수량, ``filled_qty``=실제 체결 수량, ``status``=체결 상태.
+
+    KIS 모의는 접수를 '완료'로 응답하므로 접수≠체결 — 봇이 일별체결 조회로 ``filled_qty``/
+    ``status`` 를 채운다(미반영 시 status='접수', filled_qty=0).
+    """
 
     model_config = _CFG
 
@@ -39,6 +43,8 @@ class TradingOrder(BaseModel):
     ticker: str
     side: str
     qty: int
+    filled_qty: int = 0
+    status: str = "접수"
     reason: str
     message: str
 
@@ -62,7 +68,8 @@ class TradingStatus(BaseModel):
     total_eval: Decimal | None = None
     cash: Decimal | None = None
     position_count: int = 0
-    total_pnl: Decimal | None = None  # 보유 종목 pnl_amount 합
+    total_pnl: Decimal | None = None  # 보유 종목 pnl_amount 합(미실현)
+    realized_pnl: Decimal | None = None  # 체결된 매도들의 누적 실현손익
     as_of: str | None = None  # 최신 NAV ts
     disclaimer: str = DISCLAIMER
 

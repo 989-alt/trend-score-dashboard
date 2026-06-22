@@ -70,6 +70,18 @@ class TraderLoop:
             return set()
         return {o.ticker for o in orders if o.order_qty > o.filled_qty}
 
+    def _reconcile_fills(self, now: datetime) -> None:
+        """당일 체결 조회 → 접수 기록에 실제 체결 수량·체결가·실현손익 반영(fail-open).
+
+        표시 정합성 보강일 뿐 — 실패해도 매매에 영향이 없어야 하므로 모든 예외를 흡수한다.
+        (KIS 모의는 접수를 '완료'로 응답해, 이 재조회 없이는 접수와 실제 체결이 어긋난다.)
+        """
+        try:
+            statuses = self._oc.inquire_orders(now.strftime("%Y%m%d"))
+            self._ts.reconcile_fills(statuses)
+        except Exception:
+            logger.warning("체결 재조회 실패 — 무시(fail-open)", exc_info=True)
+
     def run_once(self, now: datetime) -> None:
         """1사이클: 스냅샷→잔고동기화→(장중)결정→매도→매수→NAV/포지션 기록."""
         snap = self._store.load_snapshot(self._market)
@@ -93,6 +105,7 @@ class TraderLoop:
         if not is_market_open(self._market, now):
             logger.info("장 마감 — 주문 스킵 (market=%s)", self._market)
             _record_nav()
+            self._reconcile_fills(now)  # 마감 후 당일 체결 확정값 반영
             return
 
         decisions = self._engine.decide(snap.entries, self._pm, top_n=self._s.trader_top_n)
@@ -134,6 +147,7 @@ class TraderLoop:
                     self._ts.record_order(order, reason="진입:점수상위")
 
         _record_nav()
+        self._reconcile_fills(now)  # 직전 사이클들의 접수 → 실제 체결 반영(멱등)
 
     def _is_us(self) -> bool:
         """미장 여부 — 미장은 지정가(LIMIT) 전용(시장가 없음), 국장은 시장가."""
