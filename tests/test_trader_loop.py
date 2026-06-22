@@ -354,6 +354,32 @@ def test_run_once_inquire_error_fails_open(tmp_path: Path) -> None:
     assert {c[0] for c in oc.calls} == {"A", "B"}
 
 
+def test_run_once_reconciles_fills_and_realized(tmp_path: Path) -> None:
+    """사이클 끝 체결 재조회: 접수 매도가 체결로 갱신 + 실현손익 산정.
+
+    매도 H(평단 10,000)가 12,000 에 7주 전량 체결 → (12000-10000)*7 = 14,000 실현.
+    체결 상태라 멱등 가드의 '미체결'엔 안 걸린다(order_qty==filled_qty).
+    """
+    snap = _snap([_entry("H", "85", sell_alert=True, sell_reason="trailing_stop")])
+    balance = Balance(
+        cash=Decimal("20000000"),
+        total_eval=Decimal("20000000"),
+        positions=[HoldingPosition(ticker="H", qty=7, avg_price=Decimal("10000"))],
+    )
+    # 매도 H 의 order_no 는 첫 주문이라 "O1" — 같은 번호로 체결 결과를 돌려준다.
+    filled = OrderStatus(
+        order_no="O1", ticker="H", side="sell", order_qty=7, filled_qty=7,
+        filled_price=Decimal("12000"), status="체결",
+    )
+    loop, oc, ts = _loop(snap=snap, balance=balance, tmp_path=tmp_path, pending=[filled])
+
+    loop.run_once(_NOW)
+
+    order = next(o for o in ts.recent_orders() if o["ticker"] == "H")
+    assert order["filled_qty"] == 7 and order["status"] == "체결"
+    assert ts.realized_pnl_total() == Decimal("14000")
+
+
 # ── 미장 지정가(LIMIT) 처리 (P8) ──────────────────────────────────────────
 
 

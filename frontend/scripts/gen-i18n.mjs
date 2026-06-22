@@ -224,7 +224,8 @@ const ko = {
   "trading.stopped": "정지",
   "trading.totalEval": "총 평가금액",
   "trading.cash": "현금",
-  "trading.totalPnl": "총 손익",
+  "trading.totalPnl": "미실현 손익",
+  "trading.realizedPnl": "실현 손익",
   "trading.positionCount": "보유 종목",
   "trading.positions": "보유 포지션",
   "trading.orders": "최근 주문·체결",
@@ -242,6 +243,9 @@ const ko = {
   "trading.side.sell": "매도",
   "trading.asOf": "기준",
   "trading.return": "수익률",
+  "trading.fill.filled": "체결",
+  "trading.fill.partial": "부분체결",
+  "trading.fill.none": "미체결",
 
   "footer.disclaimer":
     "본 대시보드는 투자 자문에 해당하지 않으며, 투자의 판단과 결정은 철저히 개인에게 있습니다.",

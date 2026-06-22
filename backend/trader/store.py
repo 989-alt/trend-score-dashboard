@@ -17,13 +17,15 @@ from pathlib import Path
 from typing import Any
 
 from backend.schemas import Market
-from backend.trader.models import OrderResult
+from backend.trader.models import OrderResult, OrderStatus
 
 _SCHEMA = """
 PRAGMA journal_mode=WAL;
 CREATE TABLE IF NOT EXISTS orders (
     ts TEXT, order_no TEXT, org_no TEXT, ticker TEXT, side TEXT,
-    qty INTEGER, reason TEXT, message TEXT
+    qty INTEGER, reason TEXT, message TEXT,
+    filled_qty INTEGER DEFAULT 0, status TEXT DEFAULT '접수',
+    filled_price TEXT, realized TEXT
 );
 CREATE TABLE IF NOT EXISTS nav (
     ts TEXT, market TEXT, total_eval TEXT, cash TEXT, PRIMARY KEY (ts, market)
@@ -61,7 +63,25 @@ class TradeStore:
         self._lock = threading.Lock()
         self._migrate_if_legacy()
         self._conn.executescript(_SCHEMA)
+        self._ensure_order_columns()
         self._conn.commit()
+
+    def _ensure_order_columns(self) -> None:
+        """구 orders 테이블(체결 컬럼 없는)에 체결·실현 컬럼을 보강(데이터 보존 ALTER).
+
+        ``CREATE TABLE IF NOT EXISTS`` 는 기존 테이블에 컬럼을 추가하지 않으므로, 이미 운영 중인
+        DB(접수만 기록하던)는 여기서 누락 컬럼만 채운다. 신규 DB 는 _SCHEMA 로 이미 갖춰져 no-op.
+        """
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(orders)").fetchall()}
+        adds = {
+            "filled_qty": "INTEGER DEFAULT 0",
+            "status": "TEXT DEFAULT '접수'",
+            "filled_price": "TEXT",
+            "realized": "TEXT",
+        }
+        for name, decl in adds.items():
+            if name not in cols:
+                self._conn.execute(f"ALTER TABLE orders ADD COLUMN {name} {decl}")
 
     def _migrate_if_legacy(self) -> None:
         """구 스키마(market 컬럼 없는 nav/position_snap) 감지 시 표시용 NAV 테이블만 재생성.
@@ -82,10 +102,17 @@ class TradeStore:
 
     # ── 쓰기 ───────────────────────────────────────────────────────────
     def record_order(self, order: OrderResult, *, reason: str = "") -> None:
-        """주문 접수 1건 기록(append). ``reason`` = 진입/청산 사유."""
+        """주문 **접수** 1건 기록(append). ``reason`` = 진입/청산 사유.
+
+        접수 시점이라 ``filled_qty=0 · status='접수'``. 실제 체결은 이후 :meth:`reconcile_fills`
+        가 KIS 일별체결 조회로 채운다(접수≠체결 — KIS 모의는 접수를 '완료'로 응답).
+        """
         with self._lock:
             self._conn.execute(
-                "INSERT INTO orders VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO orders "
+                "(ts, order_no, org_no, ticker, side, qty, reason, message, "
+                " filled_qty, status, filled_price, realized) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, '접수', NULL, NULL)",
                 (
                     order.submitted_at.isoformat(),
                     order.order_no,
@@ -98,6 +125,60 @@ class TradeStore:
                 ),
             )
             self._conn.commit()
+
+    def reconcile_fills(self, statuses: list[OrderStatus]) -> None:
+        """KIS 일별체결 조회 결과로 접수 기록의 **실제 체결 수량·체결가·상태**를 갱신(멱등).
+
+        ``order_no`` 로 매칭한다. 매도가 처음으로 체결(>0)되면 직전 스냅샷 평단 대비 **실현손익**을
+        1회 산정해 저장한다(이미 산정된 행은 건너뜀 — 1분 루프 재호출에도 중복 집계 안 됨).
+        조회 실패/미매칭은 무시(fail-open) — 표시 보강일 뿐 매매에 영향 없음.
+        """
+        with self._lock:
+            for s in statuses:
+                if not s.order_no:
+                    continue
+                row = self._conn.execute(
+                    "SELECT ts, side, realized FROM orders WHERE order_no = ?", (s.order_no,)
+                ).fetchone()
+                if row is None:
+                    continue
+                order_ts, side, realized = row
+                realized_text: str | None = None
+                if side == "sell" and realized is None and s.filled_qty > 0 and s.filled_price:
+                    basis = self._cost_basis(s.ticker, order_ts)
+                    if basis is not None:
+                        realized_text = _s((s.filled_price - basis) * Decimal(s.filled_qty))
+                self._conn.execute(
+                    "UPDATE orders SET filled_qty = ?, status = ?, filled_price = ?, "
+                    "realized = COALESCE(realized, ?) WHERE order_no = ?",
+                    (
+                        s.filled_qty,
+                        s.status or ("체결" if s.filled_qty >= s.order_qty else "미체결"),
+                        _s(s.filled_price),
+                        realized_text,
+                        s.order_no,
+                    ),
+                )
+            self._conn.commit()
+
+    def _cost_basis(self, ticker: str, before_ts: str) -> Decimal | None:
+        """``before_ts`` 직전(이하)에 그 종목을 보유했던 가장 최근 스냅샷의 평단. 없으면 None."""
+        row = self._conn.execute(
+            "SELECT avg_price FROM position_snap WHERE ticker = ? AND ts <= ? "
+            "ORDER BY ts DESC LIMIT 1",
+            (ticker, before_ts),
+        ).fetchone()
+        return _dec(row[0]) if row and row[0] is not None else None
+
+    def realized_pnl_total(self) -> Decimal | None:
+        """체결된 매도들의 누적 실현손익 합. 산정된 행이 하나도 없으면 None."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT realized FROM orders WHERE realized IS NOT NULL"
+            ).fetchall()
+        if not rows:
+            return None
+        return sum((_dec(r[0]) or Decimal("0") for r in rows), Decimal("0"))
 
     def record_snapshot(
         self,
@@ -140,11 +221,21 @@ class TradeStore:
     def recent_orders(self, limit: int = 50) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT ts, order_no, ticker, side, qty, reason, message "
-                "FROM orders ORDER BY ts DESC LIMIT ?",
+                "SELECT ts, order_no, ticker, side, qty, reason, message, "
+                "filled_qty, status FROM orders ORDER BY ts DESC LIMIT ?",
                 (limit,),
             ).fetchall()
-        keys = ("ts", "order_no", "ticker", "side", "qty", "reason", "message")
+        keys = (
+            "ts",
+            "order_no",
+            "ticker",
+            "side",
+            "qty",
+            "reason",
+            "message",
+            "filled_qty",
+            "status",
+        )
         return [dict(zip(keys, r, strict=True)) for r in rows]
 
     def latest_positions(self) -> list[dict[str, Any]]:

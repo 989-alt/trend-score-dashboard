@@ -6,9 +6,16 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
-from backend.trader.models import Balance, HoldingPosition, OrderResult
+from backend.trader.models import Balance, HoldingPosition, OrderResult, OrderStatus
 from backend.trader.positions import PositionManager
 from backend.trader.store import TradeStore
+
+
+def _sell(order_no: str, ticker: str, ts: datetime) -> OrderResult:
+    return OrderResult(
+        order_no=order_no, org_no="6", ticker=ticker, side="sell", qty=10,
+        submitted_at=ts, message="모의투자 매도주문이 완료 되었습니다.",
+    )
 
 
 def test_trade_store_roundtrip(tmp_path: Path) -> None:
@@ -157,6 +164,90 @@ def test_legacy_schema_db_recreated(tmp_path: Path) -> None:
         positions=[],
     )
     assert len(store.nav_series(market="KR")) == 1
+
+
+def test_recent_orders_default_fill_fields(tmp_path: Path) -> None:
+    """접수 직후 기록은 filled_qty=0 · status='접수'(체결 아님)."""
+    store = TradeStore(tmp_path / "t.db")
+    store.record_order(_sell("1", "005930", datetime(2026, 6, 22, 9, 5, tzinfo=UTC)))
+    o = store.recent_orders()[0]
+    assert o["filled_qty"] == 0 and o["status"] == "접수"
+    assert store.realized_pnl_total() is None  # 체결 전이라 실현손익 없음
+
+
+def test_reconcile_fills_sets_fill_and_realized(tmp_path: Path) -> None:
+    """체결 재조회 → filled_qty/상태 갱신 + 직전 평단 대비 실현손익 산정."""
+    store = TradeStore(tmp_path / "t.db")
+    # 직전 스냅샷: 005930 평단 70,000(실현손익 기준점).
+    store.record_snapshot(
+        datetime(2026, 6, 22, 9, 0, tzinfo=UTC),
+        total_eval=Decimal("1"),
+        cash=Decimal("1"),
+        positions=[HoldingPosition(ticker="005930", qty=10, avg_price=Decimal("70000")).model_dump()],
+    )
+    store.record_order(_sell("1", "005930", datetime(2026, 6, 22, 9, 5, tzinfo=UTC)))
+    # 75,000 에 10주 전량 체결 → (75000-70000)*10 = 50,000 실현.
+    store.reconcile_fills(
+        [OrderStatus(order_no="1", ticker="005930", side="sell", order_qty=10,
+                     filled_qty=10, filled_price=Decimal("75000"), status="체결")]
+    )
+    o = store.recent_orders()[0]
+    assert o["filled_qty"] == 10 and o["status"] == "체결"
+    assert store.realized_pnl_total() == Decimal("50000")
+
+
+def test_reconcile_fills_is_idempotent(tmp_path: Path) -> None:
+    """1분 루프가 같은 체결을 반복 조회해도 실현손익은 1회만 집계."""
+    store = TradeStore(tmp_path / "t.db")
+    store.record_snapshot(
+        datetime(2026, 6, 22, 9, 0, tzinfo=UTC),
+        total_eval=Decimal("1"), cash=Decimal("1"),
+        positions=[HoldingPosition(ticker="005930", qty=10, avg_price=Decimal("70000")).model_dump()],
+    )
+    store.record_order(_sell("1", "005930", datetime(2026, 6, 22, 9, 5, tzinfo=UTC)))
+    fill = OrderStatus(order_no="1", ticker="005930", side="sell", order_qty=10,
+                       filled_qty=10, filled_price=Decimal("75000"), status="체결")
+    store.reconcile_fills([fill])
+    store.reconcile_fills([fill])  # 재호출
+    assert store.realized_pnl_total() == Decimal("50000")  # 100,000 아님
+
+
+def test_reconcile_unfilled_sell_stays_unrealized(tmp_path: Path) -> None:
+    """접수만 되고 체결 0 이면 미체결 표시 + 실현손익 없음(접수≠체결)."""
+    store = TradeStore(tmp_path / "t.db")
+    store.record_snapshot(
+        datetime(2026, 6, 22, 9, 0, tzinfo=UTC),
+        total_eval=Decimal("1"), cash=Decimal("1"),
+        positions=[HoldingPosition(ticker="000660", qty=1, avg_price=Decimal("2735000")).model_dump()],
+    )
+    store.record_order(_sell("9", "000660", datetime(2026, 6, 22, 9, 2, tzinfo=UTC)))
+    store.reconcile_fills(
+        [OrderStatus(order_no="9", ticker="000660", side="sell", order_qty=1,
+                     filled_qty=0, filled_price=None, status="")]
+    )
+    o = store.recent_orders()[0]
+    assert o["filled_qty"] == 0 and o["status"] == "미체결"
+    assert store.realized_pnl_total() is None
+
+
+def test_ensure_order_columns_migrates_legacy_orders(tmp_path: Path) -> None:
+    """체결 컬럼 없는 구 orders 테이블도 ALTER 로 보강 — 기존 행 보존 + 기본값."""
+    import sqlite3
+
+    db = tmp_path / "legacy_orders.db"
+    conn = sqlite3.connect(str(db))
+    conn.executescript(
+        "CREATE TABLE orders (ts TEXT, order_no TEXT, org_no TEXT, ticker TEXT, "
+        "side TEXT, qty INTEGER, reason TEXT, message TEXT);"
+        "INSERT INTO orders VALUES ('2026-06-22T09:01:00+09:00','1','6','005930',"
+        "'sell',14,'청산:순위이탈','ok');"
+    )
+    conn.commit()
+    conn.close()
+
+    store = TradeStore(db)  # 보강 ALTER 수행
+    o = store.recent_orders()[0]
+    assert o["ticker"] == "005930" and o["filled_qty"] == 0 and o["status"] == "접수"
 
 
 def test_position_manager_sync_and_size() -> None:

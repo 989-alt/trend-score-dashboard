@@ -340,6 +340,7 @@ export async function fetchTradingStatus(signal?: AbortSignal): Promise<TradingS
     cash: toNum(raw.cash),
     positionCount: raw.position_count ?? 0,
     totalPnl: toNum(raw.total_pnl),
+    realizedPnl: toNum(raw.realized_pnl),
     asOf: raw.as_of ?? null,
     disclaimer: raw.disclaimer,
   };
@@ -367,6 +368,8 @@ export async function fetchTradingHistory(
         ticker: o.ticker,
         side: o.side,
         qty: o.qty,
+        filledQty: o.filled_qty ?? 0,
+        status: o.status ?? "",
         reason: o.reason,
         message: o.message,
       }),

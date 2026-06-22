@@ -68,6 +68,7 @@ function StatusHeader({ status }: { status: TradingStatus | null }) {
   const running = status?.running ?? false;
   const pnl = status?.totalPnl ?? null;
   const pnlSign = signClass(pnl);
+  const realized = status?.realizedPnl ?? null;
   return (
     <div className={styles.statusCard}>
       <div className={styles.statusTop}>
@@ -96,6 +97,17 @@ function StatusHeader({ status }: { status: TradingStatus | null }) {
           <dt className={styles.metricLabel}>{t("trading.totalPnl")}</dt>
           <dd className={`${styles.metricValue} ${styles[pnlSign]}`} data-num>
             {pnl === null ? "—" : `${pnl > 0 ? "+" : ""}${won(pnl, t)}`}
+          </dd>
+        </div>
+        <div className={styles.metric}>
+          <dt className={styles.metricLabel}>{t("trading.realizedPnl")}</dt>
+          <dd
+            className={`${styles.metricValue} ${styles[signClass(realized)]}`}
+            data-num
+          >
+            {realized === null
+              ? "—"
+              : `${realized > 0 ? "+" : ""}${won(realized, t)}`}
           </dd>
         </div>
         <div className={styles.metric}>
@@ -219,6 +231,13 @@ function PositionsTable({ positions }: { positions: TradingPosition[] }) {
   );
 }
 
+/** 체결 상태 — 접수 수량 대비 체결 수량으로 판정(KIS 텍스트 변형에 무관하게 일관). */
+function fillState(o: TradingOrder): "filled" | "partial" | "none" {
+  if (o.filledQty >= o.qty && o.filledQty > 0) return "filled";
+  if (o.filledQty > 0) return "partial";
+  return "none";
+}
+
 function OrdersTimeline({ orders }: { orders: TradingOrder[] }) {
   const t = useT();
   const sideLabel = (side: string): string =>
@@ -232,6 +251,9 @@ function OrdersTimeline({ orders }: { orders: TradingOrder[] }) {
         <ul className={styles.timeline}>
           {orders.map((o, i) => {
             const isSell = o.side.toLowerCase() === "sell";
+            // status 가 비면 구 백엔드(체결 필드 없음) → 칩 숨김(전량 미체결 오표시 방지).
+            const hasFill = o.status !== "";
+            const fill = fillState(o);
             return (
               <li key={`${o.ts}-${o.ticker}-${i}`} className={styles.order}>
                 <span className={styles.orderTs} data-num>
@@ -246,8 +268,15 @@ function OrdersTimeline({ orders }: { orders: TradingOrder[] }) {
                   {o.ticker}
                 </span>
                 <span className={styles.orderQty} data-num>
-                  {fmtNumber(o.qty, 0)}
+                  {hasFill && o.filledQty < o.qty
+                    ? `${fmtNumber(o.filledQty, 0)}/${fmtNumber(o.qty, 0)}`
+                    : fmtNumber(o.qty, 0)}
                 </span>
+                {hasFill && (
+                  <span className={`${styles.fillChip} ${styles[fill]}`}>
+                    {t(`trading.fill.${fill}`)}
+                  </span>
+                )}
                 <span className={styles.orderReason}>{o.reason}</span>
               </li>
             );

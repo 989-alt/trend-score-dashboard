@@ -343,6 +343,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             cash=latest_nav["cash"] if latest_nav else None,
             position_count=len(positions),
             total_pnl=total_pnl,
+            realized_pnl=trade_store.realized_pnl_total(),
             as_of=latest_nav["ts"] if latest_nav else None,
             disclaimer=DISCLAIMER,
         )
@@ -367,6 +368,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 ticker=o["ticker"],
                 side=o["side"],
                 qty=o["qty"],
+                filled_qty=o["filled_qty"],
+                status=o["status"],
                 reason=o["reason"],
                 message=o["message"],
             )
