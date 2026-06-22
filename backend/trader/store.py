@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS orders (
     ts TEXT, order_no TEXT, org_no TEXT, ticker TEXT, side TEXT,
     qty INTEGER, reason TEXT, message TEXT,
     filled_qty INTEGER DEFAULT 0, status TEXT DEFAULT '접수',
-    filled_price TEXT, realized TEXT
+    filled_price TEXT, realized TEXT, name TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS nav (
     ts TEXT, market TEXT, total_eval TEXT, cash TEXT, PRIMARY KEY (ts, market)
@@ -78,6 +78,7 @@ class TradeStore:
             "status": "TEXT DEFAULT '접수'",
             "filled_price": "TEXT",
             "realized": "TEXT",
+            "name": "TEXT DEFAULT ''",
         }
         for name, decl in adds.items():
             if name not in cols:
@@ -101,18 +102,19 @@ class TradeStore:
         self._conn.commit()
 
     # ── 쓰기 ───────────────────────────────────────────────────────────
-    def record_order(self, order: OrderResult, *, reason: str = "") -> None:
-        """주문 **접수** 1건 기록(append). ``reason`` = 진입/청산 사유.
+    def record_order(self, order: OrderResult, *, reason: str = "", name: str = "") -> None:
+        """주문 **접수** 1건 기록(append). ``reason`` = 진입/청산 사유, ``name`` = 종목명(표시용).
 
         접수 시점이라 ``filled_qty=0 · status='접수'``. 실제 체결은 이후 :meth:`reconcile_fills`
         가 KIS 일별체결 조회로 채운다(접수≠체결 — KIS 모의는 접수를 '완료'로 응답).
+        ``name`` 은 KIS 주문 응답엔 없어 호출부(스냅샷 종목명)가 넘겨준다 — 없으면 코드로 표시.
         """
         with self._lock:
             self._conn.execute(
                 "INSERT INTO orders "
                 "(ts, order_no, org_no, ticker, side, qty, reason, message, "
-                " filled_qty, status, filled_price, realized) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, '접수', NULL, NULL)",
+                " filled_qty, status, filled_price, realized, name) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, '접수', NULL, NULL, ?)",
                 (
                     order.submitted_at.isoformat(),
                     order.order_no,
@@ -122,6 +124,7 @@ class TradeStore:
                     order.qty,
                     reason,
                     order.message,
+                    name,
                 ),
             )
             self._conn.commit()
@@ -221,7 +224,7 @@ class TradeStore:
     def recent_orders(self, limit: int = 50) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT ts, order_no, ticker, side, qty, reason, message, "
+                "SELECT ts, order_no, ticker, name, side, qty, reason, message, "
                 "filled_qty, status FROM orders ORDER BY ts DESC LIMIT ?",
                 (limit,),
             ).fetchall()
@@ -229,6 +232,7 @@ class TradeStore:
             "ts",
             "order_no",
             "ticker",
+            "name",
             "side",
             "qty",
             "reason",
@@ -239,19 +243,20 @@ class TradeStore:
         return [dict(zip(keys, r, strict=True)) for r in rows]
 
     def latest_positions(self) -> list[dict[str, Any]]:
-        """가장 최근 스냅샷의 보유 종목 — **시장별 최신 ts 의 합집합**(국장+미장 병합).
+        """**가장 최근 사이클**의 보유 종목 — 시장별 최신 NAV ts 기준(국장+미장 병합).
 
-        KR·US 는 서로 다른 사이클(ts)로 기록하므로 단일 MAX(ts)면 한쪽이 누락된다. 시장별로 각자의
-        최신 스냅샷을 골라 합친다(현재 미장은 보유 0).
+        기준 ts 는 ``nav`` 의 MAX(ts)다(**position_snap 이 아님**). 매 사이클 ``nav`` 행은 항상
+        쓰지만 보유 0 이면 ``position_snap`` 행은 안 쓴다. position_snap 의 MAX(ts)를 쓰면 매도로
+        계좌가 비어도 **마지막 보유 스냅샷이 영구 고정**되어 유령 포지션·고정 현재가가 보였다(라이브
+        버그). NAV ts 기준이면 최신 사이클이 flat 일 때 빈 리스트를 정확히 반환한다.
+        KR·US 는 다른 사이클(ts)이라 시장별로 각자의 최신 NAV ts 를 본다.
         """
         with self._lock:
-            markets = [
-                r[0] for r in self._conn.execute("SELECT DISTINCT market FROM position_snap")
-            ]
+            markets = [r[0] for r in self._conn.execute("SELECT DISTINCT market FROM nav")]
             out: list[dict[str, Any]] = []
             for mkt in markets:
                 row = self._conn.execute(
-                    "SELECT MAX(ts) FROM position_snap WHERE market = ?", (mkt,)
+                    "SELECT MAX(ts) FROM nav WHERE market = ?", (mkt,)
                 ).fetchone()
                 if not row or not row[0]:
                     continue
