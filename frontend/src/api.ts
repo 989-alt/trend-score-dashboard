@@ -14,6 +14,7 @@ import type {
   RawNewsIssuesResponse,
   RawScoreEntry,
   RawSnapshot,
+  RawRegimeResponse,
   RawThemesResponse,
   RawTradingNavResponse,
   RawTradingOrder,
@@ -22,6 +23,8 @@ import type {
   RawTradingPositionsResponse,
   RawTradingStatus,
   RawWeeklyResponse,
+  RegimeData,
+  RegimeInfo,
   ScoreEntry,
   Snapshot,
   ThemesData,
@@ -210,6 +213,30 @@ function newsIssuesUrl(): string {
   if (API_BASE) return `${API_BASE}/api/news/issues`;
   if (STATIC_DEMO) return `${BASE}data/news-issues.json`;
   return "/api/news/issues";
+}
+
+function regimeUrl(): string | null {
+  if (API_BASE) return `${API_BASE}/api/regime`;
+  if (STATIC_DEMO) return null; // 정적 데모엔 레짐 엔드포인트 없음 → 배너 숨김
+  return "/api/regime";
+}
+
+export async function fetchRegime(signal?: AbortSignal): Promise<RegimeData> {
+  const url = regimeUrl();
+  if (!url) return { markets: [] };
+  const raw = await getJson<RawRegimeResponse>(url, signal);
+  return {
+    markets: (raw.markets ?? []).map(
+      (m): RegimeInfo => ({
+        market: m.market,
+        regime: m.regime,
+        indexClose: toNum(m.index_close),
+        ma200: toNum(m.ma200),
+        adx: toNum(m.adx),
+        aboveMa200: m.above_ma200 ?? null,
+      }),
+    ),
+  };
 }
 
 function newsWeeklyUrl(): string {

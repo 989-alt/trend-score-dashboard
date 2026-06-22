@@ -415,3 +415,31 @@ export interface TradingNavData {
   nav: NavPoint[];
   disclaimer: string;
 }
+
+// ── 레짐(장세) ──────────────────────────────────────────────────────────
+export interface RawRegimeInfo {
+  market: string;
+  regime: string;
+  index_close?: Num;
+  ma200?: Num;
+  adx?: Num;
+  above_ma200?: boolean | null;
+}
+
+export interface RawRegimeResponse {
+  markets: RawRegimeInfo[];
+  disclaimer: string;
+}
+
+export interface RegimeInfo {
+  market: string;
+  regime: string; // UP_TREND | CHOP_VOL | DOWN | UNKNOWN
+  indexClose: number | null;
+  ma200: number | null;
+  adx: number | null;
+  aboveMa200: boolean | null;
+}
+
+export interface RegimeData {
+  markets: RegimeInfo[];
+}

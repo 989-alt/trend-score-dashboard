@@ -30,6 +30,7 @@ from backend import market_hours
 from backend import scheduler as sched
 from backend.config import ROOT_DIR, Settings, get_settings
 from backend.engine import build_themes_response, ticker_detail
+from backend.market_data import get_provider
 from backend.news.api_models import (
     NewsIssue,
     NewsIssuesResponse,
@@ -45,10 +46,13 @@ from backend.news.issues import (
     load_severity,
 )
 from backend.news.store import NewsStore
+from backend.regime import assess_regime
 from backend.schemas import (
     DISCLAIMER,
     HealthResponse,
     Market,
+    RegimeInfo,
+    RegimeResponse,
     ScoreEntry,
     Snapshot,
     SnapshotCounts,
@@ -222,6 +226,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
         now = datetime.now(tz=_SEOUL)
         return build_themes_response(snapshots, theme_defs, cfg, now)
+
+    @application.get("/api/regime", response_model=RegimeResponse)
+    def regime() -> RegimeResponse:
+        """시장별 레짐(장세) — 지수 방향(MA200)×강도(ADX). 읽기전용.
+
+        sync 핸들러라 FastAPI 가 스레드풀에서 실행(provider 의 동기 지수조회가 이벤트루프를
+        막지 않게). 지수 일봉은 일1회 캐시라 폴링마다 재조회하지 않는다. 실패는 UNKNOWN 흡수.
+        """
+        provider = get_provider(cfg)
+        markets = [
+            RegimeInfo(
+                market=market,
+                regime=(r := assess_regime(provider, market, cfg)).regime,
+                index_close=r.index_close,
+                ma200=r.ma200,
+                adx=r.adx,
+                above_ma200=r.above_ma200,
+            )
+            for market in _MARKETS
+        ]
+        return RegimeResponse(markets=markets, disclaimer=DISCLAIMER)
 
     @application.get("/api/ticker/{market}/{code}", response_model=ScoreEntry)
     async def ticker(market: str, code: str) -> ScoreEntry:

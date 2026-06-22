@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import {
   fetchNewsIssues,
   fetchNewsWeekly,
+  fetchRegime,
   fetchSnapshot,
   fetchThemes,
   fetchTicker,
@@ -24,6 +25,7 @@ import { EntryLane } from "./components/EntryLane";
 import { RankingTable } from "./components/RankingTable";
 import { ThemeBoard } from "./components/ThemeBoard";
 import { NewsView } from "./components/NewsView";
+import { RegimeBanner } from "./components/RegimeBanner";
 import { TradingView } from "./components/TradingView";
 import { IssueRail } from "./components/IssueRail";
 import { DetailDrawer } from "./components/drawer/DetailDrawer";
@@ -81,6 +83,12 @@ export function App() {
   });
   const weeklyFetcher = useCallback((signal: AbortSignal) => fetchNewsWeekly(signal), []);
   const weekly = usePolling(weeklyFetcher, ["weekly"], {
+    intervalMs: 5 * 60_000,
+    enabled: isNewsTab,
+  });
+  // 레짐(장세) 배너 — 시황 탭에서만 폴링. 일봉 기반이라 느린 주기로 충분.
+  const regimeFetcher = useCallback((signal: AbortSignal) => fetchRegime(signal), []);
+  const regime = usePolling(regimeFetcher, ["regime"], {
     intervalMs: 5 * 60_000,
     enabled: isNewsTab,
   });
@@ -236,13 +244,16 @@ export function App() {
             ) : showError ? (
               <ErrorView onRetry={active.refresh} />
             ) : (
-              <NewsView
-                data={news.data}
-                weekly={weekly.data}
-                onSelectTicker={handleSelectTicker}
-                selectedKey={newsIssueKey}
-                onSelectKey={setNewsIssueKey}
-              />
+              <>
+                <RegimeBanner markets={regime.data?.markets ?? []} />
+                <NewsView
+                  data={news.data}
+                  weekly={weekly.data}
+                  onSelectTicker={handleSelectTicker}
+                  selectedKey={newsIssueKey}
+                  onSelectKey={setNewsIssueKey}
+                />
+              </>
             )
           ) : isTradingTab ? (
             showInitialLoading ? (

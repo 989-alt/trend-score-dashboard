@@ -247,6 +247,16 @@ const ko = {
   "trading.fill.partial": "부분체결",
   "trading.fill.none": "미체결",
 
+  "regime.title": "장세(레짐)",
+  "regime.kr": "국장",
+  "regime.us": "미장",
+  "regime.adx": "추세강도",
+  "regime.UP_TREND": "상승추세",
+  "regime.CHOP_VOL": "횡보·고변동",
+  "regime.DOWN": "하락",
+  "regime.UNKNOWN": "판정 중",
+  "regime.hint": "지수 방향(MA200)과 추세강도(ADX)로 본 장세입니다.",
+
   "footer.disclaimer":
     "본 대시보드는 투자 자문에 해당하지 않으며, 투자의 판단과 결정은 철저히 개인에게 있습니다.",
   "footer.method": "추세추종(맛동산/Sperandeo) 방법론 기반 · 30분 자동 갱신",

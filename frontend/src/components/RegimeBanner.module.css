@@ -1,0 +1,67 @@
+.banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border-radius: var(--radius, 8px);
+  background: var(--surface, rgba(255, 255, 255, 0.03));
+}
+
+.title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mkt {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.chip {
+  padding: 2px 10px;
+  border-radius: var(--radius-pill, 999px);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.chip.up {
+  color: var(--up);
+  background: var(--up-bg);
+}
+
+.chip.down {
+  color: var(--down);
+  background: var(--down-bg);
+}
+
+.chip.chop {
+  color: var(--brand, #fcd535);
+  background: rgba(252, 213, 53, 0.12);
+}
+
+.chip.unknown {
+  color: var(--text-muted);
+  background: var(--surface-2, rgba(255, 255, 255, 0.06));
+}
+
+.adx {
+  font-size: 11px;
+  color: var(--text-faint, var(--text-muted));
+}
