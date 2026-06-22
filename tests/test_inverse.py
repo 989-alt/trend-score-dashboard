@@ -43,6 +43,16 @@ def test_inverse_no_trade_in_uptrend() -> None:
     assert simulate_inverse(_rows([100 + i for i in range(260)])) == []
 
 
+def test_inverse_injected_down_dates_override_regime() -> None:
+    """down_dates 주입 시 내부 레짐 대신 그 날짜집합으로 진입(타이밍 연구용 경로)."""
+    rows = _rows([400 - i for i in range(30)])  # 짧아 내부 레짐은 UNKNOWN(MA200 불가)
+    # 명시 하락일 주입 → 그 구간 진입.
+    down = frozenset(r.date for r in rows[5:25])
+    trades = simulate_inverse(rows, down_dates=down)
+    assert len(trades) >= 1
+    assert simulate_inverse(rows, down_dates=frozenset()) == []  # 하락일 없으면 무거래
+
+
 def test_inverse_trailing_stop_on_sharp_bounce() -> None:
     """하락 보유 중 지수 급반등 → 인버스 equity 고점대비 급락 → 트레일링 손절."""
     rows = _rows([400 - i for i in range(232)] + [400 - 231 + x for x in (40, 60)])
