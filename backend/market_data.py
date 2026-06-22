@@ -644,6 +644,9 @@ _CACHE_OHLCV = "ohlcv"
 _CACHE_FUND = "fundamentals"
 _CACHE_INDEX = "index"
 _CACHE_UNIVERSE = "universe"
+#: 지수 일봉 캐시 최소 보관 봉수 — 레짐(MA200+ADX14) 소비자가 충분히 쓰도록 넉넉히.
+#: RS(~28봉)가 먼저 캐시를 채워도 레짐이 200봉을 못 받던 버그 방지(최대 소비자 기준 1회 적재).
+_INDEX_MIN_DAYS = 260
 #: 유니버스 캐시의 sentinel ticker — DailyCache 키를 재사용하되 종목이 아니라 시장 1행으로 둔다.
 _UNIVERSE_SENTINEL = "_UNIVERSE_"
 #: 네이버 금융 시가총액 순위(KRX MDC 비의존 enumeration). sosok: KOSPI=0/KOSDAQ=1, 페이지당 50종목.
@@ -1304,7 +1307,9 @@ class LiveProvider:
         if cached is not None:
             rows = _OHLCVList.model_validate_json(cached).rows
         else:
-            rows = self._yf_ohlcv(symbol, days)
+            # 최대 소비자(레짐 MA200+ADX)에 맞춰 넉넉히 적재 — 첫 호출자(RS ~28봉)가
+            # 캐시 길이를 고정해 레짐이 200봉을 못 받던 버그 방지.
+            rows = self._yf_ohlcv(symbol, max(days, _INDEX_MIN_DAYS))
             self._daily.put(
                 market,
                 symbol,
