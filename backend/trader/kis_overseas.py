@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
@@ -34,6 +35,9 @@ from backend.trader.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: 주문 시각은 KST 로 찍는다 — kis_order 와 동일(앱 전역 Asia/Seoul · 프론트 표시 계약 일치).
+_SEOUL = ZoneInfo("Asia/Seoul")
 
 _DOMAINS = {
     "mock": "https://openapivts.koreainvestment.com:29443",
@@ -222,7 +226,7 @@ class KisOverseasOrderClient:
             ticker=ticker,
             side=side,
             qty=qty,
-            submitted_at=datetime.now(tz=UTC),
+            submitted_at=datetime.now(tz=_SEOUL),
             message=str(data.get("msg1", "")),
         )
 
@@ -247,7 +251,7 @@ class KisOverseasOrderClient:
             ticker="",
             side="sell",
             qty=qty,
-            submitted_at=datetime.now(tz=UTC),
+            submitted_at=datetime.now(tz=_SEOUL),
             message=str(data.get("msg1", "")),
         )
 
