@@ -371,7 +371,7 @@ def test_run_once_reconciles_fills_and_realized(tmp_path: Path) -> None:
         order_no="O1", ticker="H", side="sell", order_qty=7, filled_qty=7,
         filled_price=Decimal("12000"), status="체결",
     )
-    loop, oc, ts = _loop(snap=snap, balance=balance, tmp_path=tmp_path, pending=[filled])
+    loop, _oc, ts = _loop(snap=snap, balance=balance, tmp_path=tmp_path, pending=[filled])
 
     loop.run_once(_NOW)
 

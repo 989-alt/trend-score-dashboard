@@ -366,6 +366,7 @@ export async function fetchTradingHistory(
       (o: RawTradingOrder): TradingOrder => ({
         ts: o.ts,
         ticker: o.ticker,
+        name: o.name ?? "",
         side: o.side,
         qty: o.qty,
         filledQty: o.filled_qty ?? 0,

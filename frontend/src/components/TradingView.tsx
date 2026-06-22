@@ -264,9 +264,12 @@ function OrdersTimeline({ orders }: { orders: TradingOrder[] }) {
                 >
                   {sideLabel(o.side)}
                 </span>
-                <span className={styles.orderTicker} data-num>
-                  {o.ticker}
-                </span>
+                <span className={styles.orderName}>{o.name || o.ticker}</span>
+                {o.name !== "" && (
+                  <span className={styles.orderTicker} data-num>
+                    {o.ticker}
+                  </span>
+                )}
                 <span className={styles.orderQty} data-num>
                   {hasFill && o.filledQty < o.qty
                     ? `${fmtNumber(o.filledQty, 0)}/${fmtNumber(o.qty, 0)}`

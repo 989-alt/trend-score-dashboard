@@ -366,6 +366,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             TradingOrder(
                 ts=o["ts"],
                 ticker=o["ticker"],
+                name=o["name"],
                 side=o["side"],
                 qty=o["qty"],
                 filled_qty=o["filled_qty"],

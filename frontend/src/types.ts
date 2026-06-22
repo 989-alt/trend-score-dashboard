@@ -335,6 +335,7 @@ export interface RawTradingPositionsResponse {
 export interface RawTradingOrder {
   ts: string;
   ticker: string;
+  name?: string;
   side: string;
   qty: number;
   filled_qty?: number;
@@ -385,6 +386,7 @@ export interface TradingPosition {
 export interface TradingOrder {
   ts: string;
   ticker: string;
+  name: string;
   side: string;
   qty: number;
   filledQty: number;

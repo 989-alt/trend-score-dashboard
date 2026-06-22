@@ -41,6 +41,7 @@ class TradingOrder(BaseModel):
 
     ts: str
     ticker: str
+    name: str = ""
     side: str
     qty: int
     filled_qty: int = 0
