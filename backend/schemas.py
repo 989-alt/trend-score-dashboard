@@ -221,6 +221,28 @@ class HealthResponse(BaseModel):
     last_us_snapshot: datetime | None = None
 
 
+class RegimeInfo(BaseModel):
+    """시장 레짐(장세) 1건 — 지수 방향(MA200)×강도(ADX) 판정 + 진단(읽기전용)."""
+
+    model_config = _CFG
+
+    market: Market
+    regime: Literal["UP_TREND", "CHOP_VOL", "DOWN", "UNKNOWN"]
+    index_close: Decimal | None = None
+    ma200: Decimal | None = None
+    adx: Decimal | None = None
+    above_ma200: bool | None = None
+
+
+class RegimeResponse(BaseModel):
+    """``GET /api/regime`` — 시장별 레짐 + 면책."""
+
+    model_config = _CFG
+
+    markets: list[RegimeInfo]
+    disclaimer: str = DISCLAIMER
+
+
 __all__ = [
     "DISCLAIMER",
     "FactorBreakdown",
@@ -229,6 +251,8 @@ __all__ = [
     "InvestorFlow",
     "Market",
     "OHLCVRow",
+    "RegimeInfo",
+    "RegimeResponse",
     "ScoreEntry",
     "SellReason",
     "Snapshot",
