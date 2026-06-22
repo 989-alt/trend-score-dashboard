@@ -336,6 +336,36 @@ def test_live_index_ohlcv_yf_and_daily_cache(monkeypatch: pytest.MonkeyPatch) ->
     assert first == second
 
 
+def test_live_index_ohlcv_fetches_min_history_for_regime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RS(작은 days)가 먼저 캐시를 채워도 레짐(MA200+ADX)용으로 충분히 적재 — 최소 봉수 요청.
+
+    회귀: 첫 호출자(RS ~28봉)가 캐시 길이를 고정해 레짐이 200봉을 못 받아 UNKNOWN 되던 버그.
+    """
+    from backend.market_data import _INDEX_MIN_DAYS
+
+    lp = _live()
+    requested: dict[str, int] = {}
+
+    def fake_yf_ohlcv(symbol: str, days: int) -> list[OHLCVRow]:
+        requested["days"] = days
+        return [
+            OHLCVRow(
+                date=datetime(2026, 1, 2, tzinfo=UTC).date(),
+                open=Decimal("100"),
+                high=Decimal("100"),
+                low=Decimal("100"),
+                close=Decimal("100"),
+                volume=Decimal("1000"),
+            )
+        ]
+
+    monkeypatch.setattr(lp, "_yf_ohlcv", fake_yf_ohlcv)
+    lp.get_index_ohlcv("KR", 28)  # RS 스타일의 작은 요청
+    assert requested["days"] >= _INDEX_MIN_DAYS
+
+
 def test_sample_index_ohlcv_deterministic() -> None:
     """SampleProvider 지수 일봉 — 결정론·시장별 상이·days 슬라이스."""
     sp = SampleProvider()
