@@ -20,16 +20,28 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backend.config import get_settings  # noqa: E402
+from backend.config import Settings, get_settings  # noqa: E402
 from backend.market_data import get_provider  # noqa: E402
 from backend.trader.errors import KisOrderError  # noqa: E402
 from backend.trader.kis_auth import token_from_settings  # noqa: E402
 from backend.trader.kis_order import KisOrderClient  # noqa: E402
 from backend.trader.kis_overseas import KisOverseasOrderClient  # noqa: E402
+from backend.trader.models import OrderResult  # noqa: E402
+from backend.trader.store import TradeStore  # noqa: E402
 
 _MOCK = "https://openapivts.koreainvestment.com:29443"
 _KR_TICKER = "000660"  # SK하이닉스
 _US_TICKER = "GOOGL"  # 알파벳 A
+_REASON = "강제매수:스모크"  # 매매 현황에 출처가 남도록(트레이더 매매와 구분)
+
+
+def _log(settings: Settings, order: OrderResult) -> None:
+    """강제매수를 TradeStore 에 접수 기록 — 매매 현황 history 에 출처가 남게 한다.
+
+    이 기록이 없으면 강제매수로 생긴 보유가 history 에 안 보여 '매수 없이 보유'처럼 보인다.
+    체결 수량/실현손익은 트레이더 루프의 체결 재조회가 채운다(같은 order_no).
+    """
+    TradeStore(settings.trader_db_path).record_order(order, reason=_REASON)
 
 
 def main() -> None:
@@ -45,6 +57,7 @@ def main() -> None:
         print(f"강제 매수: KR {_KR_TICKER}(SK하이닉스) 1주 시장가")
         try:
             r = client.place_order(_KR_TICKER, "buy", 1, market=True)
+            _log(settings, r)
             print("결과 — ODNO:", r.order_no, "msg:", r.message)
         except KisOrderError as exc:
             print("주문 실패:", exc)
@@ -64,6 +77,7 @@ def main() -> None:
     overseas = KisOverseasOrderClient(settings, mode="mock", token=token)
     try:
         r = overseas.place_order(_US_TICKER, "buy", 1, price=limit)
+        _log(settings, r)
         print("결과 — ODNO:", r.order_no, "msg:", r.message)
     except KisOrderError as exc:
         print("주문 실패:", exc)
