@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from datetime import datetime
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -40,6 +41,20 @@ _SEOUL = ZoneInfo("Asia/Seoul")
 
 #: 모의 도메인 — 국내·해외 클라이언트가 공유(토큰도 이 도메인 기준 1개).
 _MOCK_DOMAIN = "https://openapivts.koreainvestment.com:29443"
+
+
+def _us_quote_fn(settings: Settings) -> Callable[[str], Decimal]:
+    """미장 마케터블 지정가용 현재가 조회자 — 대시보드 provider(US=yfinance) 재사용.
+
+    모의 도메인 시세보다 정확한 실시세를 쓴다(force_buy 와 동일 경로). 지연 import 로
+    국장 전용 구동 시 market_data(yfinance 등)를 끌어오지 않는다. 호출 실패는 루프가 흡수.
+    """
+    from backend.market_data import get_provider
+
+    def _quote(ticker: str) -> Decimal:
+        return get_provider(settings).get_quote(ticker, "US").price
+
+    return _quote
 
 
 def _build_decider(settings: Settings) -> GeminiDecider | None:
@@ -67,8 +82,10 @@ def build_loop(
     """
     tok = token or token_from_settings(settings, _MOCK_DOMAIN)
     order_client: OrderClient
+    quote_fn: Callable[[str], Decimal] | None = None
     if market == "US":
         order_client = KisOverseasOrderClient(settings, mode="mock", token=tok)
+        quote_fn = _us_quote_fn(settings)  # 미장 마케터블 지정가 = 신선 현재가×(1+프리미엄)
     else:
         order_client = KisOrderClient(settings, mode="mock", token=tok)
     store = Store(settings.db_path)
@@ -84,6 +101,7 @@ def build_loop(
         trade_store=trade_store,
         engine=engine,
         position_manager=pm,
+        quote_fn=quote_fn,
     )
 
 

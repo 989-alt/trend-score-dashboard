@@ -155,6 +155,16 @@ class Settings(BaseSettings):
     #: 매수 결정용 Gemini 모델. 결정=적격후보 중 선별이라 flash 로 충분(4주 ~$6) — pro 는 ~$200.
     #: 더 저렴=gemini-2.0-flash / 최고품질=gemini-2.5-pro (GEMINI_MODEL_DECISION 로 교체).
     gemini_model_decision: str = "gemini-2.5-flash"
+    #: 미장 마케터블 지정가 프리미엄(현재가 대비). KIS 해외는 시장가가 없어, 주문 시 신선 현재가×
+    #: (1+이 값)으로 매수호가 위에 지정가를 내 즉시 체결시킨다. 0 이면 현재가 그대로(비마케터블 →
+    #: 영영 미체결 = 무한 재주문 버그). 0.01 = +1%.
+    trader_us_buy_premium_pct: Decimal = Decimal("0.01")
+    #: 같은 종목 재매수 차단 시간(시간). 이 시간 내 매수 접수한 종목은 신규 매수 스킵(과매매 억제).
+    #: 12h = 미장 1세션(KST 자정 넘김 포함)·국장 1일을 덮되 다음 동일시장 세션은 막지 않는다.
+    trader_rebuy_block_hours: int = Field(default=12, ge=1)
+    #: 일손실 킬스위치 임계(당일 NAV 낙폭). 당일 첫 NAV 대비 이만큼 빠지면 신규 매수 중단(청산은
+    #: 계속), 익일 첫 NAV 갱신 시 자동 해제. 0 이면 비활성. 0.03 = −3%.
+    trader_max_daily_loss_pct: Decimal = Decimal("0.03")
 
     @property
     def cors_origin_list(self) -> list[str]:

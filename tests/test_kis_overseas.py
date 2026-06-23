@@ -263,27 +263,64 @@ def test_get_balance_psamount_failure_cash_zero(monkeypatch: pytest.MonkeyPatch)
     assert len(bal.positions) == 1
 
 
-def test_inquire_orders_unfilled(monkeypatch: pytest.MonkeyPatch) -> None:
-    """미체결 조회 — output 의 종목/잔여수량을 OrderStatus(order_qty>filled_qty)로."""
+def test_inquire_orders_ccnl(monkeypatch: pytest.MonkeyPatch) -> None:
+    """주문체결내역(ccnl) — 체결·미체결 모두 파싱(수량·체결가)·전일~당일 2일 조회."""
     c = _client()
+    cap: dict[str, Any] = {}
     payload = {
         "rt_cd": "0",
         "output": [
-            {
+            {  # 현재 열린 미체결(nccs 5) → order_qty=체결0+열림5=5 → 멱등 가드가 pending 으로 인식
                 "odno": "0001",
+                "pdno": "AMD",
+                "sll_buy_dvsn_cd": "02",
+                "ft_ord_qty": "5",
+                "ft_ccld_qty": "0",
+                "nccs_qty": "5",
+                "ft_ccld_unpr3": "0",
+                "prcs_stat_name": "접수",
+            },
+            {  # 전량 체결(nccs 0) → order_qty=체결3=3 → reconcile 가 체결수량·체결가 반영
+                "odno": "0002",
                 "pdno": "AAPL",
                 "sll_buy_dvsn_cd": "02",
-                "nccs_qty": "5",
-                "prcs_stat_name": "접수",
-            }
+                "ft_ord_qty": "3",
+                "ft_ccld_qty": "3",
+                "nccs_qty": "0",
+                "ft_ccld_unpr3": "190.25",
+                "prcs_stat_name": "완료",
+            },
+            {  # 만료/취소된 빈 주문(체결0+열림0) → 스킵(손절 매도 오발동 차단)
+                "odno": "0003",
+                "pdno": "NVDA",
+                "sll_buy_dvsn_cd": "02",
+                "ft_ord_qty": "2",
+                "ft_ccld_qty": "0",
+                "nccs_qty": "0",
+                "prcs_stat_name": "취소",
+            },
         ],
     }
-    monkeypatch.setattr(c._client, "get", lambda path, headers=None, params=None: _resp(payload))
-    orders = c.inquire_orders("20260622")
-    assert len(orders) == 1
-    o = orders[0]
-    assert o.order_no == "0001" and o.ticker == "AAPL" and o.side == "buy"
-    assert o.order_qty == 5 and o.filled_qty == 0  # 멱등 가드가 미체결로 인식
+
+    def fake_get(path: str, headers: Any = None, params: Any = None) -> httpx.Response:
+        cap["path"], cap["params"], cap["headers"] = path, params, headers
+        return _resp(payload)
+
+    monkeypatch.setattr(c._client, "get", fake_get)
+    orders = c.inquire_orders("20260623")
+
+    assert len(orders) == 2  # 만료/취소된 NVDA(체결0+열림0) 제외
+    by = {o.ticker: o for o in orders}
+    assert "NVDA" not in by  # 빈 주문은 pending 오인(손절 차단) 방지로 스킵
+    # 열린 미체결 AMD: order_qty>filled_qty → 멱등 가드가 pending 으로 인식(무한 재주문 차단)
+    assert by["AMD"].order_qty == 5 and by["AMD"].filled_qty == 0 and by["AMD"].side == "buy"
+    # 체결 AAPL: filled_qty==order_qty + 체결가. 상태는 수량 도출용 빈 문자열(완료≠체결 오인 차단)
+    assert by["AAPL"].order_qty == 3 and by["AAPL"].filled_qty == 3
+    assert by["AAPL"].filled_price == Decimal("190.25") and by["AAPL"].status == ""
+    # ccnl 엔드포인트·TR·전일~당일(KST 자정 넘김 대비) 2일 조회·체결+미체결 전체
+    assert "inquire-ccnl" in cap["path"] and cap["headers"]["tr_id"] == "VTTS3035R"
+    assert cap["params"]["ORD_STRT_DT"] == "20260622"
+    assert cap["params"]["ORD_END_DT"] == "20260623" and cap["params"]["CCLD_NCCS_DVSN"] == "00"
 
 
 def test_rt_cd_error_raises(monkeypatch: pytest.MonkeyPatch) -> None:

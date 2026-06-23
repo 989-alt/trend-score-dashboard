@@ -183,6 +183,31 @@ class TradeStore:
             return None
         return sum((_dec(r[0]) or Decimal("0") for r in rows), Decimal("0"))
 
+    def tickers_bought_since(self, cutoff_iso: str) -> set[str]:
+        """``cutoff_iso``(ISO8601) 이후 **매수 접수**한 종목 집합 — 당일 재매수(과매매) 억제용.
+
+        저장 ts 와 동일 오프셋(앱 전역 KST)이라 ISO 문자열 사전식 비교가 시간순과 일치한다.
+        체결 여부와 무관하게 '접수했으면' 차단한다(미체결 종목의 1분 무한 재주문을 끊는 게 목적).
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT DISTINCT ticker FROM orders WHERE side = 'buy' AND ts >= ?",
+                (cutoff_iso,),
+            ).fetchall()
+        return {r[0] for r in rows if r[0]}
+
+    def first_nav_today(self, market: Market, day: str) -> Decimal | None:
+        """``day``(YYYY-MM-DD) 그 시장의 **첫 NAV(total_eval)**. 없으면 None — 일손실 킬스위치 기준.
+
+        익일이 되면 그날 첫 NAV 가 새 기준이 되어 킬스위치가 자동 해제된다(상태 불요).
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT total_eval FROM nav WHERE market = ? AND ts LIKE ? ORDER BY ts LIMIT 1",
+                (market, f"{day}%"),
+            ).fetchone()
+        return _dec(row[0]) if row and row[0] is not None else None
+
     def record_snapshot(
         self,
         at: datetime,

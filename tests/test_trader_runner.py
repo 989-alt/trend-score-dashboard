@@ -49,6 +49,9 @@ def test_build_loop_us_uses_overseas_client(tmp_path: Path) -> None:
     assert us._market == "US"
     assert isinstance(us._oc, KisOverseasOrderClient)
     assert isinstance(kr._oc, KisOrderClient)
+    # 미장은 마케터블 지정가용 현재가 조회자 주입, 국장은 시장가라 불요(None).
+    assert us._quote_fn is not None
+    assert kr._quote_fn is None
 
 
 def test_build_loop_shares_token(tmp_path: Path) -> None:

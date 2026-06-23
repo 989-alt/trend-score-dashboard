@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -51,14 +51,14 @@ _EXCG = "NASD"
 _TR_BUY = "VTTT1002U"  # 해외 매수(모의). 실전 TTTT1002U.
 _TR_SELL = "VTTT1001U"  # 해외 매도(모의). 실전 TTTT1006U.
 _TR_BALANCE = "VTRP6504R"  # 해외 잔고(모의). 실전 TTTS3012R.
-_TR_NCCS = "VTTS3018R"  # 해외 미체결(모의). 라이브 가동 전 확인.
+_TR_CCNL = "VTTS3035R"  # 해외 주문체결내역(모의). 실전 TTTS3035R — 체결·미체결 모두 반환.
 _TR_CANCEL = "VTTT1004U"  # 해외 정정취소(모의). 라이브 가동 전 확인.
 _TR_PSAMT = "VTTS3007R"  # 해외 매수가능금액(모의) — 통합증거금 반영 buying power.
 
 _ORDER_PATH = "/uapi/overseas-stock/v1/trading/order"
 _CANCEL_PATH = "/uapi/overseas-stock/v1/trading/order-rvsecncl"
 _BALANCE_PATH = "/uapi/overseas-stock/v1/trading/inquire-balance"
-_NCCS_PATH = "/uapi/overseas-stock/v1/trading/inquire-nccs"
+_CCNL_PATH = "/uapi/overseas-stock/v1/trading/inquire-ccnl"
 _PSAMT_PATH = "/uapi/overseas-stock/v1/trading/inquire-psamount"
 
 #: 매수가능금액 조회는 **계좌단위 주문가능액**(ord_psbl_frcr_amt)이 종목·단가와 무관하게 동일
@@ -328,41 +328,62 @@ class KisOverseasOrderClient:
         cash = self.buying_power()
         return Balance(cash=cash, total_eval=cash + holdings_eval, positions=positions)
 
-    # ── 미체결 조회 (멱등 가드용) ──────────────────────────────────────
+    # ── 주문체결내역 조회 (멱등 가드 + 체결 reconcile 겸용) ────────────
     def inquire_orders(self, query_date: str) -> list[OrderStatus]:
-        """해외 미체결 조회 → ``OrderStatus`` 목록. ``query_date`` 는 시그니처 호환용(미사용).
+        """해외 주문체결내역(inquire-ccnl) → ``OrderStatus`` 목록. ``query_date`` = YYYYMMDD.
 
-        멱등 가드는 '잔여수량 있는 종목'만 필요하므로 미체결(nccs)을 그대로 반환한다.
-        잔여수량은 ``order_qty`` 에, ``filled_qty=0`` 으로 둬 루프의 ``order_qty>filled_qty``
-        판정을 통과시킨다. **일부 파라미터/필드는 라이브 가동 전 KIS 문서 확인.**
+        국내 ``inquire-daily-ccld`` 와 동형 — **체결·미체결을 모두** 반환하고 주문수량/체결수량/
+        체결가를 채운다. 루프는 이 한 조회로 멱등 가드(``order_qty>filled_qty``)와 체결 reconcile
+        을 동시에 한다. (구 ``inquire-nccs`` 는 미체결만·``filled_qty=0`` 고정이라 체결이 영영
+        반영 안 돼 — 매분 무한 재주문 + 체결 미표시의 원인이었다.)
+
+        미장 세션은 KST 자정을 넘기므로 **전일~당일 2일**을 조회한다. 멱등 가드는 '현재 열린
+        주문'만 막아야 하므로 ``order_qty`` = **체결수량 + 미체결수량(nccs_qty)** 로 둔다 — 만료·
+        취소된 빈 주문(둘 다 0)은 스킵해 손절 매도까지 막는 오발동을 차단한다. 상태는 수량으로
+        도출(reconcile ``filled>=order`` 폴백)해 '완료≠체결' 오인을 막는다.
         """
+        start = (datetime.strptime(query_date, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
         params = {
             "CANO": self._cano,
             "ACNT_PRDT_CD": self._prod,
+            "PDNO": "",  # 전 종목
+            "ORD_STRT_DT": start,
+            "ORD_END_DT": query_date,
+            "SLL_BUY_DVSN": "00",  # 00=전체
+            "CCLD_NCCS_DVSN": "00",  # 00=전체(체결+미체결)
             "OVRS_EXCG_CD": _EXCG,
-            "SORT_SQN_DVSN": "01",  # 라이브 가동 전 확인.
-            "CTX_AREA_FK200": "",
+            "SORT_SQN": "DS",  # 정순
+            "ORD_DT": "",
+            "ORD_GNO_BRNO": "",
+            "ODNO": "",
             "CTX_AREA_NK200": "",
+            "CTX_AREA_FK200": "",
         }
-        data = self._get(_NCCS_PATH, tr_id=_TR_NCCS, params=params)
+        data = self._get(_CCNL_PATH, tr_id=_TR_CCNL, params=params)
+        rows = data.get("output") or []
+        if rows:  # 첫 라이브 사이클에 실제 필드명 검증용(키만, 값 미출력 = 시크릿 0).
+            logger.debug("해외 체결내역 필드: %s", sorted(rows[0].keys()))
         out: list[OrderStatus] = []
-        for r in data.get("output") or []:
-            ticker = str(r.get("pdno", "") or r.get("ovrs_pdno", ""))
-            # 미체결 잔여수량 — 필드명이 응답마다 다를 수 있어 후보를 순차 시도.
-            remain = (
-                _i(r.get("nccs_qty"))
-                or _i(r.get("ord_psbl_qty"))
-                or _i(r.get("ft_ord_qty"))
-                or _i(r.get("ord_qty"))
+        for r in rows:
+            filled_qty = _i(r.get("ft_ccld_qty")) or _i(r.get("ccld_qty"))
+            open_qty = _i(r.get("nccs_qty"))  # 현재 미체결(working) — 0 이면 종결(체결/취소/만료)
+            order_qty = filled_qty + open_qty
+            if order_qty <= 0:  # 체결0+열림0 = 만료/취소된 빈 주문 → 멱등 오발동·표시 오염 방지.
+                continue
+            price = (
+                _dec(r.get("ft_ccld_unpr3"))
+                or _dec(r.get("ft_ccld_unpr2"))
+                or _dec(r.get("ft_ccld_unpr"))
             )
             out.append(
                 OrderStatus(
                     order_no=str(r.get("odno", "")),
-                    ticker=ticker,
+                    ticker=str(r.get("pdno", "") or r.get("ovrs_pdno", "")),
                     side="buy" if str(r.get("sll_buy_dvsn_cd", "")) == "02" else "sell",
-                    order_qty=remain,
-                    filled_qty=0,
-                    status=str(r.get("prcs_stat_name", "") or "미체결"),
+                    order_qty=order_qty,
+                    filled_qty=filled_qty,
+                    filled_price=price or None,
+                    status="",  # 수량으로 도출(완료≠체결 오인 차단) — reconcile 폴백에 위임.
                 )
             )
         return out
