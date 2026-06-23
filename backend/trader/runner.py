@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -129,11 +129,19 @@ def run(settings: Settings | None = None, *, markets: tuple[Market, ...] = ("KR"
     token = token_from_settings(settings, _MOCK_DOMAIN)
     decider = _build_decider(settings)  # KR·US 공유(시장별 캐시 분리). 키 없으면 폴백.
     scheduler = BlockingScheduler(timezone=_SEOUL)
-    for market in markets:
+    # KR·US 가 같은 모의 앱키를 공유 → 동시 발화 시 KIS 초당 거래건수(EGW00201) 충돌. 루프를
+    # 주기÷시장수 만큼 시차 배치(2시장=30s)해 호출이 같은 1초에 몰리지 않게 한다.
+    base = datetime.now(tz=_SEOUL)
+    n = max(len(markets), 1)
+    for i, market in enumerate(markets):
         loop = build_loop(settings, market, token=token, decider=decider)
         scheduler.add_job(
             _make_job(loop, market),
-            IntervalTrigger(seconds=settings.trader_loop_sec, timezone=_SEOUL),
+            IntervalTrigger(
+                seconds=settings.trader_loop_sec,
+                timezone=_SEOUL,
+                start_date=base + timedelta(seconds=settings.trader_loop_sec * i / n),
+            ),
             id=f"trader-{market}",
         )
     logger.info(
