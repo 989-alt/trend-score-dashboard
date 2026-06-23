@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -118,6 +119,7 @@ def _loop(
     pending: list[OrderStatus] | None = None,
     inquire_raises: bool = False,
     market: Market = "KR",
+    quote_fn: Callable[[str], Decimal] | None = None,
 ) -> tuple[TraderLoop, FakeOrderClient, TradeStore]:
     settings = settings or Settings(trader_top_n=top_n)
     oc = FakeOrderClient(
@@ -132,6 +134,7 @@ def _loop(
         trade_store=ts,
         engine=StrategyEngine(settings),
         position_manager=PositionManager(),
+        quote_fn=quote_fn,
     )
     return loop, oc, ts
 
@@ -368,8 +371,13 @@ def test_run_once_reconciles_fills_and_realized(tmp_path: Path) -> None:
     )
     # 매도 H 의 order_no 는 첫 주문이라 "O1" — 같은 번호로 체결 결과를 돌려준다.
     filled = OrderStatus(
-        order_no="O1", ticker="H", side="sell", order_qty=7, filled_qty=7,
-        filled_price=Decimal("12000"), status="체결",
+        order_no="O1",
+        ticker="H",
+        side="sell",
+        order_qty=7,
+        filled_qty=7,
+        filled_price=Decimal("12000"),
+        status="체결",
     )
     loop, _oc, ts = _loop(snap=snap, balance=balance, tmp_path=tmp_path, pending=[filled])
 
@@ -383,8 +391,8 @@ def test_run_once_reconciles_fills_and_realized(tmp_path: Path) -> None:
 # ── 미장 지정가(LIMIT) 처리 (P8) ──────────────────────────────────────────
 
 
-def test_run_once_us_buys_use_limit(tmp_path: Path) -> None:
-    """미장 매수: 스냅샷 가격을 지정가로(market=False), 시장가 아님."""
+def test_run_once_us_buys_use_marketable_limit(tmp_path: Path) -> None:
+    """미장 매수: 마케터블 지정가(market=False). 현재가 조회자 미주입 → 스냅샷가×(1+1%) 폴백."""
     snap = _snap([_entry("AAPL", "90", price="190"), _entry("MSFT", "80", price="400")])
     balance = Balance(cash=Decimal("20000"), total_eval=Decimal("20000"), positions=[])
     loop, oc, _ts = _loop(snap=snap, balance=balance, tmp_path=tmp_path, top_n=20, market="US")
@@ -393,8 +401,29 @@ def test_run_once_us_buys_use_limit(tmp_path: Path) -> None:
 
     assert {c[0] for c in oc.calls} == {"AAPL", "MSFT"}
     placed = {p["ticker"]: p for p in oc.placed}
-    assert placed["AAPL"]["market"] is False and placed["AAPL"]["price"] == Decimal("190")
-    assert placed["MSFT"]["market"] is False and placed["MSFT"]["price"] == Decimal("400")
+    # 비마케터블(스냅샷가 그대로)이면 영영 미체결 → +1% 마케터블 지정가로 체결되게.
+    assert placed["AAPL"]["market"] is False and placed["AAPL"]["price"] == Decimal("191.90")
+    assert placed["MSFT"]["market"] is False and placed["MSFT"]["price"] == Decimal("404.00")
+
+
+def test_run_once_us_buys_use_fresh_quote(tmp_path: Path) -> None:
+    """미장 매수: 주입된 현재가 조회자가 있으면 스냅샷가가 아닌 신선 현재가×(1+1%)로 지정가."""
+    snap = _snap([_entry("AAPL", "90", price="190")])
+    balance = Balance(cash=Decimal("20000"), total_eval=Decimal("20000"), positions=[])
+    # 신선 현재가 = 200(스냅샷 190 과 다름). 지정가 = 200×1.01 = 202.00 이어야 함.
+    loop, oc, _ts = _loop(
+        snap=snap,
+        balance=balance,
+        tmp_path=tmp_path,
+        top_n=20,
+        market="US",
+        quote_fn=lambda _t: Decimal("200"),
+    )
+
+    loop.run_once(_NOW_US)
+
+    placed = {p["ticker"]: p for p in oc.placed}
+    assert placed["AAPL"]["market"] is False and placed["AAPL"]["price"] == Decimal("202.00")
 
 
 def test_run_once_us_sell_uses_cur_price_limit(tmp_path: Path) -> None:
@@ -459,3 +488,68 @@ def test_run_once_us_sell_skipped_without_limit(tmp_path: Path) -> None:
     # ZZZZ 매도는 지정가 미확보로 스킵, AAPL 매수만 접수.
     assert all(c[1] != "sell" for c in oc.calls)
     assert {o["ticker"] for o in ts.recent_orders()} == {"AAPL"}
+
+
+# ── 당일 재매수 금지 · 일손실 킬스위치 (리스크 가드 단계4) ─────────────────────
+
+
+def test_run_once_blocks_same_day_rebuy(tmp_path: Path) -> None:
+    """당일(차단창 내) 이미 매수 접수한 종목은 재매수 스킵 — 1분 무한 재주문 차단(과매매 억제)."""
+    snap = _snap([_entry("A", "90"), _entry("B", "80")])
+    balance = Balance(cash=Decimal("20000000"), total_eval=Decimal("20000000"), positions=[])
+    loop, oc, ts = _loop(snap=snap, balance=balance, tmp_path=tmp_path, top_n=20)
+    # A 를 '오늘'(같은 _NOW) 이미 매수 접수한 것으로 선기록 → 재매수 차단 대상.
+    ts.record_order(
+        OrderResult(order_no="X", org_no="6", ticker="A", side="buy", qty=1, submitted_at=_NOW),
+        reason="진입:점수상위",
+        name="A",
+    )
+
+    loop.run_once(_NOW)
+
+    assert {c[0] for c in oc.calls} == {"B"}  # A 는 당일 재매수 금지로 스킵
+    assert ("A", "buy", 95) not in oc.calls
+
+
+def test_run_once_daily_loss_kill_switch_halts_buys(tmp_path: Path) -> None:
+    """당일 첫 NAV 대비 −3% 이상 빠지면 신규 매수 중단, 매도(손절)는 계속."""
+    snap = _snap(
+        [_entry("A", "90"), _entry("H", "85", sell_alert=True, sell_reason="trailing_stop")]
+    )
+    # 현재 총평가 970만 = 당일 첫 NAV 1000만 대비 정확히 −3%(임계 도달).
+    balance = Balance(
+        cash=Decimal("9700000"),
+        total_eval=Decimal("9700000"),
+        positions=[HoldingPosition(ticker="H", qty=7, avg_price=Decimal("10000"))],
+    )
+    loop, oc, ts = _loop(snap=snap, balance=balance, tmp_path=tmp_path, top_n=20)
+    # 당일 첫 NAV = 1000만 선기록(같은 날·KR). 의사결정 시 이 값이 기준이 된다.
+    ts.record_snapshot(
+        _NOW,
+        market="KR",
+        total_eval=Decimal("10000000"),
+        cash=Decimal("10000000"),
+        positions=[],
+    )
+
+    loop.run_once(_NOW)
+
+    # 신규 매수 없음(킬스위치), 손절 매도 H 만 접수.
+    assert oc.calls == [("H", "sell", 7)]
+
+
+def test_run_once_daily_loss_inactive_above_threshold(tmp_path: Path) -> None:
+    """낙폭이 임계 미만(−2%)이면 킬스위치 미발동 — 신규 매수 정상."""
+    snap = _snap([_entry("A", "90")])
+    balance = Balance(
+        cash=Decimal("9800000"), total_eval=Decimal("9800000"), positions=[]
+    )  # 첫 NAV 1000만 대비 −2%
+    loop, oc, ts = _loop(snap=snap, balance=balance, tmp_path=tmp_path, top_n=20)
+    ts.record_snapshot(
+        _NOW, market="KR", total_eval=Decimal("10000000"), cash=Decimal("10000000"), positions=[]
+    )
+
+    loop.run_once(_NOW)
+
+    # 9,800,000*0.95/20 = 465,500 ÷ 10,000 = 46주 매수 발생(킬스위치 미발동).
+    assert ("A", "buy", 46) in oc.calls
